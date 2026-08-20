@@ -1,0 +1,39 @@
+# ОС
+Thumbs.db
+Desktop.ini
+ehthumbs.db
+$RECYCLE.BIN/
+.DS_Store
+
+# Редакторы и IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 1С 7.7: данные ИБ, индексы, блокировки
+*.DBF
+*.CDX
+*.MDX
+*.lck
+*.tmp
+*.bak
+*.old
+
+# Внешние формы (не в репозитории)
+1cv77-extforms/
+
+# Журналы и служебные каталоги 1С 7.7
+SYSLOG/
+*.log
+1Cv7.DD
+1Cv7.spl
+
+# Python (sync_modules)
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.env.*
