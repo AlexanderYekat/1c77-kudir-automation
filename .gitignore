@@ -37,3 +37,6 @@ __pycache__/
 venv/
 .env
 .env.*
+
+пример1.csv
+Пример2.csv
