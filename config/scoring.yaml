@@ -1,0 +1,31 @@
+# Единственный источник весов и порогов matcher. Отсутствие файла — FAILED.
+schema_version: 1
+
+weights:
+  direct_exact: 200
+  invoice_base_exact: 180
+  cash_base_exact: 170
+  exact_remainder: 120
+  exact_full_amount: 100
+  exact_combination: 90
+  direct_hint: 70
+  same_invoice: 60
+  same_contract: 40
+  different_contract: -20
+  unknown_contract: 0
+  same_calculation_type: 35
+  goods_or_service_match: 30
+  semantic_max: 25
+  chronology_max: 20
+
+confidence:
+  high_min_score: 150
+  high_min_gap: 40
+  medium_min_score: 80
+  medium_min_gap: 20
+  low_min_score: 50
+  low_min_gap: 10
+
+search:
+  max_candidates: 8
+  timeout_seconds_per_counterparty: 2
