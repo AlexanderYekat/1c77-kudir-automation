@@ -37,6 +37,11 @@ CASES = [
     "success_tax_not_ready",
     "ambiguous_equal_shipments",
     "bank_multi_correspondence",
+    "partial_advance_split",
+    "same_analytics_two_correspondences",
+    "posting_numeric_order",
+    "advance_other_contract_then_later_payment",
+    "historical_unresolved_blocks_tax",
 ]
 
 
@@ -119,7 +124,7 @@ class GoldenSchemaTests(unittest.TestCase):
         self.assertNotEqual(rows[0]["matched_document_id"], rows[1]["matched_document_id"])
         self.assertNotEqual(rows[1]["row_type"], "DEBT_UNRESOLVED")
         st = read_kv(d / "expected_run_status.csv")
-        self.assertEqual(st["status"], "SUCCESS")
+        self.assertEqual(st["status"], "SUCCESS_DEGRADED")
         self.assertEqual(st["tax_ready"], "1")
 
     def test_2_2_split_by_analytics_not_payment_id(self) -> None:
@@ -147,7 +152,7 @@ class GoldenSchemaTests(unittest.TestCase):
         docs = read_rows(d / "documents.csv", DOCUMENTS_FIELDS)
         self.assertTrue(any(r["ДатаДокумента"].startswith("2026-01") for r in docs))
         rows = read_rows(d / "expected_kudir_result.csv", KUDIR_RESULT_FIELDS)
-        self.assertEqual(rows[0]["match_type"], "ADVANCE_EXTENDED")
+        self.assertEqual(rows[0]["match_type"], "ADVANCE_EXTENDED_MATCH")
         self.assertEqual(rows[0]["vat_kopecks"], "0")
         self.assertIn("NO_TAX_RECALC_Q4", rows[0]["reason"])
 
@@ -173,7 +178,7 @@ class GoldenSchemaTests(unittest.TestCase):
     def test_2_7_success_with_tax_ready_zero(self) -> None:
         d = self._dir("success_tax_not_ready")
         st = read_kv(d / "expected_run_status.csv")
-        self.assertEqual(st["status"], "SUCCESS")
+        self.assertEqual(st["status"], "SUCCESS_DEGRADED")
         self.assertEqual(st["tax_ready"], "0")
         self.assertGreater(int(st["unresolved_count"]), 0)
         self.assertGreater(int(st["unresolved_debt_kopecks"]), 0)
@@ -203,6 +208,78 @@ class GoldenSchemaTests(unittest.TestCase):
         results = read_rows(d / "expected_kudir_result.csv", KUDIR_RESULT_FIELDS)
         same_pay = [r for r in results if r["payment_id"] == posting4[0]["payment_id"]]
         self.assertEqual({r["row_type"] for r in same_pay}, {"DEBT", "ADVANCE"})
+
+    def test_4_5_partial_advance_splits_result_rows(self) -> None:
+        d = self._dir("partial_advance_split")
+        rows = read_rows(d / "expected_kudir_result.csv", KUDIR_RESULT_FIELDS)
+        self.assertEqual(len(rows), 3)
+        self.assertEqual([r["row_type"] for r in rows], ["ADVANCE", "ADVANCE", "ADVANCE"])
+        self.assertEqual([r["amount_kopecks"] for r in rows], ["4200000", "2100000", "4200000"])
+        self.assertTrue(rows[0]["matched_document_id"])
+        self.assertTrue(rows[1]["matched_document_id"])
+        self.assertEqual(rows[2]["matched_document_id"], "")
+        self.assertEqual(sum(int(r["amount_kopecks"]) for r in rows), 10500000)
+
+    def test_4_5_same_analytics_does_not_reuse_debt_before(self) -> None:
+        d = self._dir("same_analytics_two_correspondences")
+        rows = read_rows(d / "expected_kudir_result.csv", KUDIR_RESULT_FIELDS)
+        debt = sum(int(r["amount_kopecks"]) for r in rows if r["row_type"] in ("DEBT", "DEBT_UNRESOLVED"))
+        adv = sum(int(r["amount_kopecks"]) for r in rows if r["row_type"] == "ADVANCE")
+        self.assertEqual(debt, 1000000)
+        self.assertEqual(adv, 200000)
+        self.assertLess(debt, 1200000)
+
+    def test_4_5_posting_sorted_as_int(self) -> None:
+        d = self._dir("posting_numeric_order")
+        rows = read_rows(d / "expected_kudir_result.csv", KUDIR_RESULT_FIELDS)
+        self.assertEqual(rows[0]["row_type"], "DEBT")
+        self.assertNotEqual(rows[0]["row_type"], "ADVANCE")
+
+    def test_4_6_act_does_not_high_match_goods_shipment(self) -> None:
+        d = self._dir("direct_ref_act_not_goods")
+        rows = read_rows(d / "expected_kudir_result.csv", KUDIR_RESULT_FIELDS)
+        self.assertEqual(rows[0]["row_type"], "DEBT_UNRESOLVED")
+        self.assertEqual(rows[0]["matched_document_id"], "")
+        self.assertEqual(read_rows(d / "expected_matches.csv", MATCHES_FIELDS), [])
+
+    def test_4_6_other_contract_still_closes_high_advance(self) -> None:
+        d = self._dir("advance_other_contract_then_later_payment")
+        rows = read_rows(d / "expected_kudir_result.csv", KUDIR_RESULT_FIELDS)
+        self.assertEqual(rows[0]["row_type"], "ADVANCE")
+        self.assertEqual(rows[0]["confidence"], "HIGH")
+        self.assertTrue(rows[0]["matched_document_id"])
+        self.assertEqual(rows[1]["row_type"], "DEBT_UNRESOLVED")
+        self.assertNotEqual(rows[0]["contract_id"], "D|00001|A")
+
+    def test_4_6_historical_unresolved_sets_state_uncertain(self) -> None:
+        d = self._dir("historical_unresolved_blocks_tax")
+        st = read_kv(d / "expected_run_status.csv")
+        self.assertEqual(st["state_uncertain"], "1")
+        self.assertEqual(st["tax_ready"], "0")
+        self.assertGreater(int(st["historical_unresolved_count"]), 0)
+        rows = read_rows(d / "expected_kudir_result.csv", KUDIR_RESULT_FIELDS)
+        self.assertTrue(all(r["payment_id"] != "BANK|0000000050|2" for r in rows))
+
+    def test_4_6_other_contract_still_closes_high_advance(self) -> None:
+        d = self._dir("advance_other_contract_then_later_payment")
+        rows = read_rows(d / "expected_kudir_result.csv", KUDIR_RESULT_FIELDS)
+        self.assertEqual(rows[0]["row_type"], "ADVANCE")
+        self.assertEqual(rows[0]["confidence"], "HIGH")
+        self.assertTrue(rows[0]["matched_document_id"])
+        self.assertNotEqual(rows[0]["contract_id"], "D|00001|A")
+        self.assertNotEqual(rows[1]["matched_document_id"], rows[0]["matched_document_id"])
+
+    def test_4_6_historical_unresolved_sets_uncertain(self) -> None:
+        d = self._dir("historical_unresolved_blocks_tax")
+        st = read_kv(d / "expected_run_status.csv")
+        self.assertEqual(st["tax_ready"], "0")
+        self.assertEqual(st["state_uncertain"], "1")
+        self.assertGreater(int(st["historical_unresolved_count"]), 0)
+        pays = read_rows(d / "payments.csv", PAYMENTS_FIELDS)
+        self.assertTrue(any(p["is_target"] == "0" for p in pays))
+        rows = read_rows(d / "expected_kudir_result.csv", KUDIR_RESULT_FIELDS)
+        self.assertTrue(all(r["payment_id"] for r in rows))
+        self.assertFalse(any(r["payment_id"] == next(p["payment_id"] for p in pays if p["is_target"] == "0") for r in rows))
 
 
 if __name__ == "__main__":

@@ -1,0 +1,3 @@
+payment_id;document_id;matched_amount_kopecks;match_type;score;confidence;direct_reference_score;invoice_link_score;amount_score;contract_score;calculation_type_score;semantic_score;chronology_score;reason
+BANK|0000000100|2;DOC|0000000200;4200000;ADVANCE_TAX_WINDOW_AMOUNT;165;HIGH;0;0;90;40;35;0;0;EXACT_REMAINDER
+BANK|0000000100|2;DOC|0000000210;2100000;ADVANCE_TAX_WINDOW_AMOUNT;165;HIGH;0;0;90;40;35;0;0;EXACT_REMAINDER

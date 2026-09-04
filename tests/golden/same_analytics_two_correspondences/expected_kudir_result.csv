@@ -1,0 +1,4 @@
+run_id;result_row_id;payment_id;row_type;matched_document_id;contract_id;amount_kopecks;advance_kopecks;repayment_kopecks;income_kopecks;vat_base_kopecks;vat_kopecks;match_type;confidence;reason;СодержаниеЗаписи
+KUDIR_GOLDEN_4_5_SAME_AN;R00001;BANK|0000000300|4;DEBT_UNRESOLVED;;D|00001|A;600000;0;600000;600000;0;0;DEBT_UNRESOLVED;LOW;NO_DOCUMENT_IN_HISTORY;Оплата задолженности от Клиент А по договору A
+KUDIR_GOLDEN_4_5_SAME_AN;R00002;BANK|0000000300|4;DEBT_UNRESOLVED;;D|00001|A;400000;0;400000;400000;0;0;DEBT_UNRESOLVED;LOW;NO_DOCUMENT_IN_HISTORY;Оплата задолженности от Клиент А по договору A
+KUDIR_GOLDEN_4_5_SAME_AN;R00003;BANK|0000000300|4;ADVANCE;;D|00001|A;200000;200000;0;200000;0;0;ADVANCE_OPEN;HIGH;ANALYTICS_A_NO_DEBT;Получен аванс от Клиент А по договору A

@@ -36,6 +36,9 @@ RUN_STATUS_KEYS = (
     "parser_available",
     "schema_version",
     "scoring_hash",
+    "state_uncertain",
+    "historical_unresolved_count",
+    "historical_unresolved_kopecks",
 )
 
 # id_map.csv — таблица ID → объект 1С, лежит в каталоге запуска

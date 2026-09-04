@@ -1,0 +1,2 @@
+payment_id;document_id;matched_amount_kopecks;match_type;score;confidence;direct_reference_score;invoice_link_score;amount_score;contract_score;calculation_type_score;semantic_score;chronology_score;reason
+BANK|0000001220|2;DOC|0000000125;1050000;ADVANCE_EXTENDED_MATCH;195;HIGH;0;0;120;40;35;0;0;PRE_VAT_ADVANCE

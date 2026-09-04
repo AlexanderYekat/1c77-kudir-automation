@@ -38,7 +38,7 @@ analysis.log
 run_status.csv
 ```
 
-В `kudir_result.csv` попадают только оплаты с `is_target=1`. Исторические оплаты участвуют в matching и восстанавливают остатки документов. `analysis.log` обязателен.
+В `kudir_result.csv` попадают только оплаты с `is_target=1`. Исторические оплаты участвуют в matching и восстанавливают остатки документов. Если историческая оплата не сопоставилась, это фиксируется: `historical_unresolved_*`, `state_uncertain=1`. Если неоднозначность касается аналитики, нужной целевому периоду, `tax_ready=0`. `analysis.log` обязателен.
 
 Через CSV передаются ID и скаляры, не объекты 1С. Аналитика оплаты — множество строк `ledger62` с данным `payment_id`. Поля договора/вида расчётов в `payments.csv` matcher не читает.
 
@@ -255,6 +255,9 @@ status;SUCCESS|SUCCESS_DEGRADED|FAILED
 tax_ready;0|1
 unresolved_debt_kopecks;...
 unresolved_count;...
+state_uncertain;0|1
+historical_unresolved_count;...
+historical_unresolved_kopecks;...
 parser_available;0|1
 schema_version;1
 scoring_hash;...
@@ -1051,7 +1054,7 @@ FIFO запрещён полностью: и как основной алгор�
 
 # 31. Обратная хронология — только последний tie-break
 
-Обратная хронология не алгоритм выбора документа. Она допускается только когда несколько кандидатов уже прошли пороги confidence и gap из `scoring.yaml` относительно остальных, и между собой равны.
+Обратная хронология не алгоритм выбора документа. Пороги `high_min_score` / `high_min_gap` считаются по score **без** chronology. Хронология допускается только когда несколько кандидатов уже прошли эти пороги относительно остальных и между собой равны. Тогда из равных берётся ближайший к оплате. `chronology_score` пишется в `matches.csv` как объяснение tie-break и HIGH не создаёт.
 
 Пример допустимого tie-break:
 
@@ -1256,12 +1259,17 @@ status;SUCCESS|SUCCESS_DEGRADED|FAILED
 tax_ready;0|1
 unresolved_debt_kopecks;...
 unresolved_count;...
+state_uncertain;0|1
+historical_unresolved_count;...
+historical_unresolved_kopecks;...
 parser_available;0|1
 schema_version;1
 scoring_hash;...
 ```
 
-`SUCCESS` при `tax_ready=0` — валидная комбинация: matching отработал, инварианты сумм держатся, но есть `DEBT_UNRESOLVED`. Цикл 2 не стартует, пока `tax_ready=0`. `analysis.log` обязателен.
+`SUCCESS` при `tax_ready=0` — валидная комбинация: matching отработал, инварианты сумм держатся, но есть `DEBT_UNRESOLVED` или историческая неоднозначность на аналитике целевого периода. Цикл 2 не стартует, пока `tax_ready=0`. `analysis.log` обязателен.
+
+Историческая оплата (`is_target=0`) в `kudir_result.csv` не пишется. Если она не сопоставилась, matcher не имеет права молча изменить `signed_balance` и оставить `document_remaining` и `tax_ready` как будто история однозначна: пишутся `HISTORICAL_UNRESOLVED` в `analysis.log`, счётчики `historical_unresolved_*` и `state_uncertain=1`.
 
 ---
 
@@ -1801,7 +1809,7 @@ tests/golden/bank_multi_correspondence
 13. ML является опциональным и в версии 1 не обязателен.
 14. Формируется `kudir_result.csv` по схеме ТЗ №1 только для `is_target=1`, с тем же `run_id`. `СодержаниеЗаписи` без CR/LF.
 15. Формируется `matches.csv` с разложением score. `analysis.log` обязателен.
-16. Поддерживается `DEBT_UNRESOLVED`; он не занимает remainder. `status` и `tax_ready` разделены; поля `unresolved_debt_kopecks`, `unresolved_count`.
+16. Поддерживается `DEBT_UNRESOLVED`; он не занимает remainder. `status` и `tax_ready` разделены; поля `unresolved_debt_kopecks`, `unresolved_count`, `state_uncertain`, `historical_unresolved_*`.
 17. Контролируется сумма каждой исходной целевой оплаты.
 18. `opening_balances.csv` обязателен; оба остатка Дт и Кт используются; ключ — аналитика.
 19. CSV читается по протоколу ТЗ №1 (Windows-1251, `;`, даты ISO, quoting).

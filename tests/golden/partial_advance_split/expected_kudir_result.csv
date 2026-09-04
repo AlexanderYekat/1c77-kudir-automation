@@ -1,0 +1,4 @@
+run_id;result_row_id;payment_id;row_type;matched_document_id;contract_id;amount_kopecks;advance_kopecks;repayment_kopecks;income_kopecks;vat_base_kopecks;vat_kopecks;match_type;confidence;reason;СодержаниеЗаписи
+KUDIR_GOLDEN_4_5_PARTIAL;R00001;BANK|0000000100|2;ADVANCE;DOC|0000000200;D|00001|A;4200000;4200000;0;4200000;0;0;ADVANCE_TAX_WINDOW_AMOUNT;HIGH;ADVANCE_TAX_WINDOW;Получен аванс от Клиент А в счёт товара по накладной №A-42 от 2026-02-10
+KUDIR_GOLDEN_4_5_PARTIAL;R00002;BANK|0000000100|2;ADVANCE;DOC|0000000210;D|00001|A;2100000;2100000;0;2100000;0;0;ADVANCE_TAX_WINDOW_AMOUNT;HIGH;ADVANCE_TAX_WINDOW;Получен аванс от Клиент А в счёт товара по накладной №A-21 от 2026-02-20
+KUDIR_GOLDEN_4_5_PARTIAL;R00003;BANK|0000000100|2;ADVANCE;;D|00001|A;4200000;4200000;0;4200000;0;0;ADVANCE_OPEN;HIGH;ADVANCE_OPEN;Получен аванс от Клиент А по договору A

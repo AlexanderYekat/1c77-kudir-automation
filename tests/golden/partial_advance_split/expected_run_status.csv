@@ -1,0 +1,12 @@
+key;value
+run_id;KUDIR_GOLDEN_4_5_PARTIAL
+status;SUCCESS_DEGRADED
+tax_ready;1
+unresolved_debt_kopecks;0
+unresolved_count;0
+parser_available;0
+schema_version;1
+scoring_hash;golden
+state_uncertain;0
+historical_unresolved_count;0
+historical_unresolved_kopecks;0

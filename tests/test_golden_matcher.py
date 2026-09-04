@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from kudir.engine import RunError, run_directory  # noqa: E402
+from kudir.legacy_parser_adapter import LegacyParserAdapter  # noqa: E402
 from kudir.ledger import Ledger  # noqa: E402
 from kudir.scoring import load_scoring  # noqa: E402
 from kudir_proto.csv_io import (  # noqa: E402
@@ -42,7 +43,24 @@ CASES = [
     "success_tax_not_ready",
     "ambiguous_equal_shipments",
     "bank_multi_correspondence",
+    "partial_advance_split",
+    "same_analytics_two_correspondences",
+    "posting_numeric_order",
+    "advance_other_contract_then_later_payment",
+    "historical_unresolved_blocks_tax",
 ]
+
+
+class _UnavailableParser(LegacyParserAdapter):
+    """Golden hermetic: не ходить на живой :8765."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.available = False
+        self._probed = True
+
+    def probe(self) -> bool:
+        return False
 
 
 class LedgerSplitTests(unittest.TestCase):
@@ -104,7 +122,7 @@ class GoldenMatcherTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, tmp, True)
         for fname in INPUTS:
             shutil.copy(src / fname, tmp / fname)
-        status = run_directory(tmp, SCORING)
+        status = run_directory(tmp, SCORING, parser=_UnavailableParser())
         self.assertIn(status, ("SUCCESS", "SUCCESS_DEGRADED"))
         return tmp
 
@@ -171,6 +189,11 @@ class GoldenMatcherTests(unittest.TestCase):
                 self.assertEqual(st["tax_ready"], exp_st["tax_ready"])
                 self.assertEqual(st["unresolved_count"], exp_st["unresolved_count"])
                 self.assertEqual(st["unresolved_debt_kopecks"], exp_st["unresolved_debt_kopecks"])
+                self.assertEqual(st.get("state_uncertain", "0"), exp_st.get("state_uncertain", "0"))
+                self.assertEqual(
+                    st.get("historical_unresolved_count", "0"),
+                    exp_st.get("historical_unresolved_count", "0"),
+                )
                 for key in RUN_STATUS_KEYS:
                     self.assertIn(key, st)
                 if name == "unattributed_62_movement":

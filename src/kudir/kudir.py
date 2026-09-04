@@ -12,6 +12,13 @@ def is_service(doc: dict[str, str] | None) -> bool:
     return "service" in kind or "услуг" in kind or "акт" in kind
 
 
+def is_goods(doc: dict[str, str] | None) -> bool:
+    if not doc or is_service(doc):
+        return False
+    kind = ((doc.get("DocumentType") or "") + " " + (doc.get("ВидДокумента") or "")).lower()
+    return "goods" in kind or "накладн" in kind or "отгрузк" in kind or "товар" in kind
+
+
 def content_line(
     row_type: str,
     counterparty_name: str,

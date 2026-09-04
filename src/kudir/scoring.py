@@ -145,7 +145,8 @@ class ScoreBreakdown:
     chronology: int = 0
 
     @property
-    def total(self) -> int:
+    def selection_total(self) -> int:
+        """Score для порогов HIGH/gap. Хронология сюда не входит."""
         return (
             self.direct_reference
             + self.invoice_link
@@ -153,8 +154,11 @@ class ScoreBreakdown:
             + self.contract
             + self.calculation_type
             + self.semantic
-            + self.chronology
         )
+
+    @property
+    def total(self) -> int:
+        return self.selection_total + self.chronology
 
     def as_csv(self) -> dict[str, str]:
         return {
@@ -173,8 +177,24 @@ class ScoreBreakdown:
         return self.direct_reference == 0 and self.invoice_link == 0 and self.amount == 0
 
 
+def apply_chronology(breakdowns: list[ScoreBreakdown], distances: list[int], max_score: int) -> None:
+    """Записать chronology_score как объяснение tie-break. Не создаёт HIGH.
+
+    Вызывать только внутри уже равной группы, прошедшей пороги selection_total/gap.
+    """
+    if max_score <= 0 or len(breakdowns) < 2 or len(breakdowns) != len(distances):
+        return
+    max_d = max(distances)
+    if max_d <= 0:
+        for bd in breakdowns:
+            bd.chronology = max_score
+        return
+    for bd, dist in zip(breakdowns, distances):
+        bd.chronology = int(round(max_score * (1.0 - dist / max_d)))
+
+
 def classify_confidence(best: int, second: int | None, cfg: ScoringConfig, breakdown: ScoreBreakdown) -> str:
-    """HIGH/MEDIUM/LOW по порогам YAML. Пустая строка — пороги не выполнены."""
+    """HIGH/MEDIUM/LOW по порогам YAML. best/second — без chronology."""
     gap = best - (0 if second is None else second)
     if breakdown.amount_only() and breakdown.chronology > 0 and breakdown.total == breakdown.chronology:
         # почти только хронология не может быть HIGH
@@ -192,3 +212,36 @@ def classify_confidence(best: int, second: int | None, cfg: ScoringConfig, break
     if best >= cfg.c("low_min_score") and gap >= cfg.c("low_min_gap"):
         return "LOW"
     return ""
+
+
+def pick_high(
+    items: list[tuple[object, ScoreBreakdown]],
+    distances: list[int],
+    cfg: ScoringConfig,
+) -> tuple[object, ScoreBreakdown] | None:
+    """HIGH по selection_total/gap. Хронология — только выбор среди уже равных.
+
+    Несколько равных без отрыва от остальных → None (не HIGH).
+    """
+    if not items or len(items) != len(distances):
+        return None
+    ranked = sorted(range(len(items)), key=lambda i: -items[i][1].selection_total)
+    best_score = items[ranked[0]][1].selection_total
+    tied = [i for i in ranked if items[i][1].selection_total == best_score]
+    rest = [i for i in ranked if items[i][1].selection_total < best_score]
+    if len(tied) == 1:
+        second = items[rest[0]][1].selection_total if rest else None
+    else:
+        second = items[rest[0]][1].selection_total if rest else best_score
+    if classify_confidence(best_score, second, cfg, items[tied[0]][1]) != "HIGH":
+        return None
+    if len(tied) > 1:
+        apply_chronology(
+            [items[i][1] for i in tied],
+            [distances[i] for i in tied],
+            cfg.w("chronology_max"),
+        )
+        chosen = min(tied, key=lambda i: distances[i])
+    else:
+        chosen = tied[0]
+    return items[chosen]

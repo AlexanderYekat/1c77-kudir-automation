@@ -98,6 +98,11 @@ class ExportSourceTests(unittest.TestCase):
         self.assertIn("+ run_id", self.src)
         self.assertIn("id_map.csv", self.src)
         self.assertIn("Коллизия ID", self.src)
+        self.assertNotIn("двусмысленный ID", self.src)
+        self.assertNotIn("C:\\Users\\Enduro", self.src)
+        remember = _code_body(self.src, "КУДиР_ЗапомнитьID")
+        self.assertIn("НайтиСсылку", remember)
+        self.assertNotIn("НайтиИдПоСсылке", remember)
         self.assertIn("глОшибка", self.src)
         self.assertIn(";".join(ID_MAP_FIELDS), self.src)
         self.assertNotIn('Возврат преф + "999"', self.src)
@@ -134,6 +139,19 @@ class ExportSourceTests(unittest.TestCase):
         conducted = _code_body(self.src, "КУДиР_ПроведенДок")
         self.assertIn("Док.Проведен()", conducted)
         self.assertNotIn("Исключение", conducted)
+
+    def test_optional_comment_is_not_failed(self) -> None:
+        comment = _code_body(self.src, "КУДиР_КомментарийДок")
+        self.assertIn('Возврат ""', comment)
+        self.assertNotIn("КУДиР_Сбой", comment)
+
+    def test_missing_proto_root_is_failed(self) -> None:
+        init_paths = _code_body(self.src, "КУДиР_ИнициализироватьПути")
+        self.assertIn("KUDIR_PROTO_ROOT", init_paths)
+        self.assertIn("КУДиР_Сбой", init_paths)
+        self.assertNotIn("C:\\Users\\Enduro", init_paths)
+        execute = _code_body(self.src, "КУДиР_Выполнить")
+        self.assertLess(execute.index("глОшибка = 0"), execute.index("КУДиР_ИнициализироватьПути"))
 
 
 if __name__ == "__main__":

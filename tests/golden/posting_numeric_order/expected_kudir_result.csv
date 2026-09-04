@@ -1,0 +1,2 @@
+run_id;result_row_id;payment_id;row_type;matched_document_id;contract_id;amount_kopecks;advance_kopecks;repayment_kopecks;income_kopecks;vat_base_kopecks;vat_kopecks;match_type;confidence;reason;СодержаниеЗаписи
+KUDIR_GOLDEN_4_5_POSTING;R00001;BANK|0000000100|10;DEBT;DOC|0000000100;D|00001|A;1000000;0;1000000;1000000;0;0;EXACT_REMAINDER;HIGH;EXACT_REMAINDER;Оплата от Клиент А за товар по накладной №A-10 от 2026-01-15

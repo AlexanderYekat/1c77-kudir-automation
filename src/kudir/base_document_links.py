@@ -61,6 +61,17 @@ class BaseLink:
         t = self.base_type.casefold()
         return "счет" in t or "счёт" in t or t in {"invoice", "invoce"}
 
+    def receivable_kind(self) -> str | None:
+        """SERVICE / GOODS / DOCUMENT. None — это счёт, не прямая ссылка на реализацию."""
+        if self.is_invoice():
+            return None
+        t = self.base_type.casefold()
+        if any(token in t for token in ("акт", "услуг", "service")):
+            return "SERVICE"
+        if any(token in t for token in ("накладн", "отгрузк", "товар", "goods")):
+            return "GOODS"
+        return "DOCUMENT"
+
 
 _BASE_RE = re.compile(
     r"введен\s+на\s+основании\s*:?\s*(?P<type>[^№\d]+?)?\s*№\s*(?P<num>[^\s]+)"

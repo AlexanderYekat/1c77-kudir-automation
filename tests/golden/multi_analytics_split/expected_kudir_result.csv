@@ -1,0 +1,3 @@
+run_id;result_row_id;payment_id;row_type;matched_document_id;contract_id;amount_kopecks;advance_kopecks;repayment_kopecks;income_kopecks;vat_base_kopecks;vat_kopecks;match_type;confidence;reason;СодержаниеЗаписи
+KUDIR_GOLDEN_2_2;R00001;BANK|0000000200|3;DEBT;DOC|0000000150;D|00001|A;1000000;0;1000000;1000000;0;0;EXACT_REMAINDER;HIGH;ANALYTICS_A_DEBT;Оплата от Клиент А за товар по накладной №A-10 от 2025-12-15
+KUDIR_GOLDEN_2_2;R00002;BANK|0000000200|3;ADVANCE;;D|00001|B;500000;500000;0;500000;0;0;ADVANCE_OPEN;HIGH;ANALYTICS_B_NO_DEBT;Получен аванс от Клиент А по договору B
