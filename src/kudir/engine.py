@@ -9,7 +9,7 @@ from kudir.legacy_parser_adapter import LegacyParserAdapter
 from kudir.loaders import LoadError, load_exchange
 from kudir.matcher import MatchError, Engine
 from kudir.scoring import ScoringError, load_scoring
-from kudir_proto.csv_io import RUN_STATUS_KEYS, SCHEMA_VERSION, file_sha256, write_kv
+from kudir_proto.csv_io import RUN_STATUS_KEYS, SCHEMA_VERSION, file_sha256, read_kv, write_kv
 
 
 class RunError(Exception):
@@ -67,10 +67,17 @@ def run_directory(exchange_dir: Path, scoring_path: Path) -> str:
 
 
 def write_failed(exchange_dir: Path, error: str) -> None:
+    run_id = ""
+    manifest = exchange_dir / "manifest.csv"
+    if manifest.is_file():
+        try:
+            run_id = read_kv(manifest).get("run_id") or ""
+        except (FileNotFoundError, ValueError, OSError):
+            run_id = ""
     write_kv(
         exchange_dir / "run_status.csv",
         {
-            "run_id": "",
+            "run_id": run_id,
             "status": "FAILED",
             "tax_ready": "0",
             "unresolved_debt_kopecks": "0",

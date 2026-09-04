@@ -19,8 +19,10 @@ set "RC=%ERRORLEVEL%"
 echo [%DATE% %TIME%] exit=%RC%>> "%LOG%"
 
 if not exist "%EXCHANGE%\run_status.csv" (
+	if exist "%EXCHANGE%\kudir_result.csv" del /q "%EXCHANGE%\kudir_result.csv"
 	echo key;value> "%EXCHANGE%\run_status.csv"
 	echo status;FAILED>> "%EXCHANGE%\run_status.csv"
+	echo tax_ready;0>> "%EXCHANGE%\run_status.csv"
 	echo error;Python did not create run_status.csv, code %RC%. See python_run.log>> "%EXCHANGE%\run_status.csv"
 )
 
