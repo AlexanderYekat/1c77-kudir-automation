@@ -14,8 +14,10 @@ from kudir_proto.csv_io import (  # noqa: E402
     DOCUMENTS_FIELDS,
     KUDIR_RESULT_FIELDS,
     LEDGER_FIELDS,
+    MATCHES_FIELDS,
     OPENING_FIELDS,
     PAYMENTS_FIELDS,
+    RUN_STATUS_KEYS,
     read_kv,
     read_rows,
     write_kv,
@@ -62,6 +64,8 @@ class RoundtripTests(unittest.TestCase):
                 "history_start": "2025-10-01",
                 "date_start": "2026-01-01",
                 "date_end": "2026-01-31",
+                "quarter_end": "2026-03-31",
+                "match_horizon_end": "2026-06-30",
             },
         )
         write_rows(
@@ -164,6 +168,15 @@ class RoundtripTests(unittest.TestCase):
         self.assertEqual(row["amount_kopecks"], "100000")
         meta = read_kv(self.dir / "run_status.csv")
         self.assertEqual(meta["status"], "SUCCESS")
+        self.assertEqual(meta["tax_ready"], "1")
+        self.assertEqual(meta["unresolved_count"], "0")
+        self.assertEqual(meta["unresolved_debt_kopecks"], "0")
+        for key in RUN_STATUS_KEYS:
+            self.assertIn(key, meta)
+        match_rows = read_rows(self.dir / "matches.csv", MATCHES_FIELDS)
+        self.assertEqual(len(match_rows), 1)
+        self.assertIn("direct_reference_score", match_rows[0])
+        self.assertIn("invoice_link_score", match_rows[0])
 
     def test_unknown_schema_is_failed_without_result(self) -> None:
         write_kv(

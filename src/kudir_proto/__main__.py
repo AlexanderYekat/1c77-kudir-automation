@@ -36,7 +36,14 @@ def main(argv: list[str] | None = None) -> int:
         write_kv(
             exchange / "run_status.csv",
             {
+                "run_id": "",
                 "status": "FAILED",
+                "tax_ready": "0",
+                "unresolved_debt_kopecks": "0",
+                "unresolved_count": "0",
+                "parser_available": "0",
+                "schema_version": "",
+                "scoring_hash": "",
                 "error": str(exc),
             },
         )
@@ -49,7 +56,14 @@ def main(argv: list[str] | None = None) -> int:
         write_kv(
             exchange / "run_status.csv",
             {
+                "run_id": "",
                 "status": "FAILED",
+                "tax_ready": "0",
+                "unresolved_debt_kopecks": "0",
+                "unresolved_count": "0",
+                "parser_available": "0",
+                "schema_version": "",
+                "scoring_hash": "",
                 "error": str(exc),
             },
         )

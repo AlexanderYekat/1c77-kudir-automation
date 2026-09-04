@@ -8,14 +8,17 @@ from kudir_proto.csv_io import (
     DOCUMENTS_FIELDS,
     KUDIR_RESULT_FIELDS,
     LEDGER_FIELDS,
+    MANIFEST_KEYS,
     MATCHES_FIELDS,
     OPENING_FIELDS,
     PAYMENTS_FIELDS,
+    RUN_STATUS_KEYS,
     SCHEMA_VERSION,
     UNRESOLVED_FIELDS,
     file_sha256,
     read_kv,
     read_rows,
+    sanitize_kudir_content,
     write_kv,
     write_rows,
 )
@@ -96,7 +99,7 @@ def stub_match(
             "match_type": "PROTO_PASSTHROUGH",
             "confidence": "LOW",
             "reason": "PROTO_STUB",
-            "СодержаниеЗаписи": _content(pay, matched),
+            "СодержаниеЗаписи": sanitize_kudir_content(_content(pay, matched)),
         }
         results.append(row)
         if doc_id:
@@ -108,6 +111,13 @@ def stub_match(
                     "match_type": "PROTO_PASSTHROUGH",
                     "score": "0",
                     "confidence": "LOW",
+                    "direct_reference_score": "0",
+                    "invoice_link_score": "0",
+                    "amount_score": "0",
+                    "contract_score": "0",
+                    "calculation_type_score": "0",
+                    "semantic_score": "0",
+                    "chronology_score": "0",
                     "reason": "PROTO_STUB_FIRST_SAME_COUNTERPARTY",
                 }
             )
@@ -137,6 +147,9 @@ def run_directory(exchange_dir: Path, scoring_path: Path) -> str:
     run_id = (manifest.get("run_id") or "").strip()
     if not run_id:
         raise ProtoError("пустой run_id в manifest.csv")
+    missing = [k for k in MANIFEST_KEYS if not (manifest.get(k) or "").strip()]
+    if missing:
+        raise ProtoError("в manifest.csv нет обязательных ключей: " + ", ".join(missing))
 
     payments = read_rows(exchange_dir / "payments.csv", PAYMENTS_FIELDS)
     documents = read_rows(exchange_dir / "documents.csv", DOCUMENTS_FIELDS)
@@ -150,15 +163,20 @@ def run_directory(exchange_dir: Path, scoring_path: Path) -> str:
     write_rows(exchange_dir / "kudir_result.csv", KUDIR_RESULT_FIELDS, results)
     write_rows(exchange_dir / "matches.csv", MATCHES_FIELDS, matches)
     write_rows(exchange_dir / "unresolved.csv", UNRESOLVED_FIELDS, unresolved)
+    unresolved_sum = sum(int(r.get("amount_kopecks") or "0") for r in unresolved)
+    tax_ready = "0" if unresolved else "1"
     write_kv(
         exchange_dir / "run_status.csv",
         {
             "run_id": run_id,
             "status": "SUCCESS",
+            "tax_ready": tax_ready,
+            "unresolved_debt_kopecks": str(unresolved_sum),
+            "unresolved_count": str(len(unresolved)),
             "parser_available": "0",
             "schema_version": SCHEMA_VERSION,
             "scoring_hash": file_sha256(scoring_path),
-            "result_rows": str(len(results)),
         },
+        keys=RUN_STATUS_KEYS,
     )
     return "SUCCESS"

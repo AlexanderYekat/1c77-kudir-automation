@@ -1,4 +1,8 @@
-"""CSV-протокол прототипа: Windows-1251, разделитель ';', даты ISO."""
+"""Канон CSV schema v1.
+
+Источник схемы — ТЗ №1 и ТЗ №2, не транспортный прототип.
+Порядок колонок фиксирован. Автоконвертация схемы запрещена.
+"""
 
 from __future__ import annotations
 
@@ -10,6 +14,7 @@ ENCODING = "cp1251"
 DELIMITER = ";"
 SCHEMA_VERSION = "1"
 
+# manifest.csv — key;value, ключи в этом порядке
 MANIFEST_KEYS = (
     "run_id",
     "schema_version",
@@ -17,7 +22,33 @@ MANIFEST_KEYS = (
     "history_start",
     "date_start",
     "date_end",
+    "quarter_end",
+    "match_horizon_end",
 )
+
+# run_status.csv — key;value, ключи в этом порядке
+RUN_STATUS_KEYS = (
+    "run_id",
+    "status",
+    "tax_ready",
+    "unresolved_debt_kopecks",
+    "unresolved_count",
+    "parser_available",
+    "schema_version",
+    "scoring_hash",
+)
+
+# id_map.csv — таблица ID → объект 1С, лежит в каталоге запуска
+ID_MAP_FIELDS = [
+    "entity_type",
+    "id",
+    "вид",
+    "номер",
+    "дата",
+    "позиция",
+    "номер_проводки",
+    "ссылка_1С",
+]
 
 PAYMENTS_FIELDS = [
     "payment_id",
@@ -26,6 +57,7 @@ PAYMENTS_FIELDS = [
     "PaymentGranularity",
     "ДатаОперации",
     "ПозицияДокумента",
+    "НомерПроводкиВДокументе",
     "НомерСтрокиВДокументе",
     "ВидДокументаОплаты",
     "НомерДокументаОплаты",
@@ -140,6 +172,13 @@ MATCHES_FIELDS = [
     "match_type",
     "score",
     "confidence",
+    "direct_reference_score",
+    "invoice_link_score",
+    "amount_score",
+    "contract_score",
+    "calculation_type_score",
+    "semantic_score",
+    "chronology_score",
     "reason",
 ]
 
@@ -148,6 +187,28 @@ UNRESOLVED_FIELDS = [
     "amount_kopecks",
     "reason",
 ]
+
+# Поля payments.csv, которые matcher не читает как аналитику.
+# Authoritative analytics = ledger62 where payment_id = …
+PAYMENTS_NON_AUTHORITATIVE = (
+    "ДоговорID",
+    "Договор",
+    "НомерДоговора",
+    "ДатаДоговора",
+    "ВидРасчетовID",
+    "ВидРасчетовСПокупателем",
+)
+
+EVENT_SORT_FIELDS = (
+    "ДатаОперации",
+    "ПозицияДокумента",
+    "НомерПроводкиВДокументе",
+)
+
+
+def sanitize_kudir_content(text: str) -> str:
+    """СодержаниеЗаписи — одна физическая строка, без CR/LF."""
+    return (text or "").replace("\r", " ").replace("\n", " ").strip()
 
 
 def read_rows(path: Path, expected_fields: list[str] | None = None) -> list[dict[str, str]]:
@@ -189,8 +250,15 @@ def read_kv(path: Path) -> dict[str, str]:
     return {r["key"]: r["value"] for r in rows if r.get("key")}
 
 
-def write_kv(path: Path, data: dict[str, str]) -> None:
-    write_rows(path, ["key", "value"], [{"key": k, "value": v} for k, v in data.items()])
+def write_kv(path: Path, data: dict[str, str], keys: tuple[str, ...] | None = None) -> None:
+    if keys is None:
+        items = list(data.items())
+    else:
+        items = [(k, data.get(k, "")) for k in keys]
+        for extra_k, extra_v in data.items():
+            if extra_k not in keys:
+                items.append((extra_k, extra_v))
+    write_rows(path, ["key", "value"], [{"key": k, "value": v} for k, v in items])
 
 
 def file_sha256(path: Path) -> str:
