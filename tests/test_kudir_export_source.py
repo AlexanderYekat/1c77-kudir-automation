@@ -26,10 +26,13 @@ from kudir_proto.csv_io import (  # noqa: E402
 )
 
 
-def _procedure_body(src: str, name: str) -> str:
-    marker = f"Процедура {name}("
-    start = src.index(marker)
-    return src[start:].split("КонецПроцедуры", 1)[0]
+def _code_body(src: str, name: str) -> str:
+    for kind, end in (("Процедура", "КонецПроцедуры"), ("Функция", "КонецФункции")):
+        marker = f"{kind} {name}("
+        if marker in src:
+            start = src.rindex(marker)
+            return src[start:].split(end, 1)[0]
+    raise ValueError(name)
 
 
 class ExportSourceTests(unittest.TestCase):
@@ -72,16 +75,16 @@ class ExportSourceTests(unittest.TestCase):
         self.assertIn('"ОтгрузкаТоваров"', self.src)
         self.assertIn('"ОказаниеУслуг"', self.src)
         self.assertIn("ЖурналДокументов", self.src)
-        collect_docs = _procedure_body(self.src, "КУДиР_СобратьДокументы")
+        collect_docs = _code_body(self.src, "КУДиР_СобратьДокументы")
         self.assertNotIn("62,90", collect_docs)
         self.assertNotIn("ВыбратьОперацииСПроводками", collect_docs)
 
     def test_3_4_all_62_movements_never_deduped_by_document_id(self) -> None:
         self.assertIn("62,*;*,62;", self.src)
-        ledger = _procedure_body(self.src, "КУДиР_СобратьLedger")
+        ledger = _code_body(self.src, "КУДиР_СобратьLedger")
         self.assertNotIn("ЕстьИдВТаблице(таблДокументы", ledger)
         self.assertNotIn("document_id уже есть", ledger)
-        add_row = _procedure_body(self.src, "КУДиР_ДобавитьСтрокуLedger")
+        add_row = _code_body(self.src, "КУДиР_ДобавитьСтрокуLedger")
         self.assertNotIn("Продолжить", add_row)
 
     def test_3_5_ids_by_entity_and_run_directory(self) -> None:
@@ -95,8 +98,10 @@ class ExportSourceTests(unittest.TestCase):
         self.assertIn("+ run_id", self.src)
         self.assertIn("id_map.csv", self.src)
         self.assertIn("Коллизия ID", self.src)
-        self.assertIn("глОшибкаID", self.src)
+        self.assertIn("глОшибка", self.src)
         self.assertIn(";".join(ID_MAP_FIELDS), self.src)
+        self.assertNotIn('Возврат преф + "999"', self.src)
+        self.assertIn("нет свободного run_id", self.src)
 
     def test_csv_headers_match_schema_v1(self) -> None:
         self.assertIn(";".join(PAYMENTS_FIELDS), self.src)
@@ -104,6 +109,31 @@ class ExportSourceTests(unittest.TestCase):
         self.assertIn(";".join(DOCUMENTS_FIELDS), self.src)
         self.assertIn(";".join(OPENING_FIELDS), self.src)
         self.assertIn('НоваяКолонка("НомерПроводкиВДокументе")', self.src)
+
+    def test_documents_vid_raschetov_not_hardcoded_empty(self) -> None:
+        add_doc = _code_body(self.src, "КУДиР_ДобавитьДокумент")
+        self.assertNotIn('ВидРасчетовID = ""', add_doc)
+        self.assertIn("КУДиР_ВидРасчетовРеквизитДок", add_doc)
+        self.assertIn("КУДиР_ВидРасчетовИзПроводок62", add_doc)
+        self.assertIn("проведённой реализации", add_doc)
+        self.assertIn("НайтиОперацию", self.src)
+        self.assertIn("КоличествоПроводок", self.src)
+
+    def test_no_silent_try_except(self) -> None:
+        code = "\n".join(
+            line for line in self.src.splitlines() if not line.lstrip().startswith("//")
+        )
+        self.assertNotIn("Попытка", code)
+        self.assertNotIn("Исключение", code)
+        self.assertNotIn("КонецПопытки", code)
+        walk = _code_body(self.src, "КУДиР_ОбойтиВидДокумента")
+        self.assertIn("в конфигурации отсутствует", walk)
+        amount = _code_body(self.src, "КУДиР_СуммаДокументаКоп")
+        self.assertIn("нет реквизита суммы", amount)
+        self.assertNotIn('Возврат "0"', amount)
+        conducted = _code_body(self.src, "КУДиР_ПроведенДок")
+        self.assertIn("Док.Проведен()", conducted)
+        self.assertNotIn("Исключение", conducted)
 
 
 if __name__ == "__main__":

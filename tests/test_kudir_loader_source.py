@@ -57,7 +57,7 @@ class LoaderSourceTests(unittest.TestCase):
         self.assertIn("manifest.csv", self.load)
         self.assertIn('КУДиР_ЗначениеKV(маниф, "run_id")', self.load)
         self.assertIn('КУДиР_ЗначениеKV(стат, "run_id")', self.load)
-        self.assertIn('КУДиР_НомерКолонки(спЗаг, "run_id")', self.load)
+        self.assertIn('КУДиР_ПроверитьКолонку(спЗаг, "run_id")', self.load)
         self.assertIn("не совпал с manifest", self.load)
         self.assertIn("Чужой результат не загружается", self.load)
         self.assertIn("\\exchange\\", self.src)
@@ -123,6 +123,20 @@ class LoaderSourceTests(unittest.TestCase):
         )
         self.assertNotIn("\n", sanitize_kudir_content("a\nb"))
         self.assertNotIn("\r", sanitize_kudir_content("a\rb"))
+
+    def test_required_columns_validated_before_rows(self) -> None:
+        header_end = self.load.index("Ошибок = 0")
+        header = self.load[:header_end]
+        for name in KUDIR_RESULT_FIELDS:
+            self.assertIn(f'КУДиР_ПроверитьКолонку(спЗаг, "{name}")', header)
+        self.assertIn("нет обязательной колонки", self.src)
+        self.assertIn("строка kudir_result короче заголовка", self.load)
+
+    def test_id_error_discards_partial_table(self) -> None:
+        err_block = self.load[self.load.index("Если Ошибок > 0") :]
+        self.assertIn("Частичная таблица отброшена", err_block)
+        self.assertIn("СформироватьТаблицуДоходовЧистовая()", err_block)
+        self.assertNotIn("Возврат таб", err_block.split("КонецЕсли", 1)[0])
 
 
 if __name__ == "__main__":
