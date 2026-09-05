@@ -3,6 +3,7 @@
 1С 7.7 в CI нет. Проверяем исходник `1cv77/kudir_export.txt` и Python-сторону:
 сверка run_id, не читать объект после ошибки ID, tax_ready не блокирует matching.
 Прототип `kudir_proto.txt` не является загрузчиком этапа 5.
+L1/L2/L3, глОшибка числа и логическая CSV-запись — `tests/test_kudir_stage60_contract.py`.
 """
 
 from __future__ import annotations
@@ -101,13 +102,11 @@ class LoaderSourceTests(unittest.TestCase):
 
     def test_5_3_physical_lines_tax_ready_does_not_block(self) -> None:
         self.assertIn("TS.ReadLine()", self.load)
-        self.assertNotIn("логическ", self.load.lower())
         self.assertIn('КУДиР_ЗначениеKV(стат, "tax_ready")', self.load)
         tax_msg = self.load.index("КУДиР не готова")
         open_result = self.load.index("\\kudir_result.csv")
         self.assertLess(tax_msg, open_result)
         self.assertIn("Matching загружается", self.load)
-        self.assertIn("цикл 2 не стартовать", self.load)
         self.assertIn("SUCCESS_DEGRADED", self.load)
         failed_block = self.load[
             self.load.index('Статус = "FAILED"') : self.load.index("SUCCESS_DEGRADED")

@@ -1,8 +1,10 @@
-"""Этап 3: контракт выгрузки 1С по ТЗ №1. Matcher не вызывается.
+"""Этап 3 + факты 5.9.1–5.9.4: контракт выгрузки 1С по ТЗ №1. Matcher не вызывается.
 
 1С 7.7 в CI нет. Проверяем исходник `1cv77/kudir_export.txt`:
-настоящее сальдо, периоды, два обхода, все 62, ID по типам, каталог запуска.
+настоящее сальдо (режим 1 + субсчета), копейки со знаком, ПКО, CONTRACT оплат,
+периоды, два обхода, все 62, ID по типам, каталог запуска.
 Прототип `kudir_proto.txt` не является выгрузкой этапа 3.
+Контракт schema v2 / потока / L1–L3 — `tests/test_kudir_stage60_contract.py`.
 """
 
 from __future__ import annotations
@@ -33,6 +35,12 @@ def _code_body(src: str, name: str) -> str:
             start = src.rindex(marker)
             return src[start:].split(end, 1)[0]
     raise ValueError(name)
+
+
+def _active(src: str) -> str:
+    return "\n".join(
+        line for line in src.splitlines() if not line.lstrip().startswith("//")
+    )
 
 
 class ExportSourceTests(unittest.TestCase):
@@ -72,10 +80,11 @@ class ExportSourceTests(unittest.TestCase):
         self.assertIn("ВыбратьДокументы", self.src)
         self.assertIn('"Документ."', self.src)
         self.assertIn('"Счет"', self.src)
-        self.assertIn('"ОтгрузкаТоваров"', self.src)
+        self.assertIn('"РасходнаяНакладная"', self.src)
         self.assertIn('"ОказаниеУслуг"', self.src)
-        self.assertIn("ЖурналДокументов", self.src)
+        self.assertNotIn('"ОтгрузкаТоваров"', self.src)
         collect_docs = _code_body(self.src, "КУДиР_СобратьДокументы")
+        self.assertNotIn("ЖурналДокументов", collect_docs)
         self.assertNotIn("62,90", collect_docs)
         self.assertNotIn("ВыбратьОперацииСПроводками", collect_docs)
 
@@ -131,11 +140,9 @@ class ExportSourceTests(unittest.TestCase):
         self.assertNotIn("Попытка", code)
         self.assertNotIn("Исключение", code)
         self.assertNotIn("КонецПопытки", code)
-        walk = _code_body(self.src, "КУДиР_ОбойтиВидДокумента")
-        self.assertIn("в конфигурации отсутствует", walk)
         amount = _code_body(self.src, "КУДиР_СуммаДокументаКоп")
-        self.assertIn("нет реквизита суммы", amount)
         self.assertNotIn('Возврат "0"', amount)
+        self.assertNotIn("Исключение", amount)
         conducted = _code_body(self.src, "КУДиР_ПроведенДок")
         self.assertIn("Док.Проведен()", conducted)
         self.assertNotIn("Исключение", conducted)
@@ -152,6 +159,65 @@ class ExportSourceTests(unittest.TestCase):
         self.assertNotIn("C:\\Users\\Enduro", init_paths)
         execute = _code_body(self.src, "КУДиР_Выполнить")
         self.assertLess(execute.index("глОшибка = 0"), execute.index("КУДиР_ИнициализироватьПути"))
+
+    def test_5_9_1_opening_balance_mode_1_and_subaccounts(self) -> None:
+        saldo = _code_body(self.src, "КУДиР_СобратьСальдоКлиента")
+        active = _active(saldo)
+        self.assertIn("ИспользоватьСубконто(ВидыСубконто.Контрагенты, Контр, 2)", active)
+        self.assertIn("ИспользоватьСубконто(ВидыСубконто.Договоры, , 1)", active)
+        self.assertIn(
+            "ИспользоватьСубконто(ВидыСубконто.ВидыРасчетовСПокупателями, , 1)",
+            active,
+        )
+        self.assertNotIn("ИспользоватьСубконто(ВидыСубконто.Договоры, , 3)", active)
+        self.assertNotIn(
+            "ИспользоватьСубконто(ВидыСубконто.ВидыРасчетовСПокупателями, , 3)",
+            active,
+        )
+        self.assertIn("ВключатьСубсчета(-1)", active)
+        self.assertLess(active.index("ВключатьСубсчета"), active.index("ВыполнитьЗапрос"))
+        self.assertLess(
+            active.index("ИспользоватьСубконто(ВидыСубконто.Договоры, , 1)"),
+            active.index("ВыполнитьЗапрос"),
+        )
+        self.assertIn("ВыбратьСубконто(2)", active)
+        self.assertIn("ВыбратьСубконто(3)", active)
+        self.assertIn("СНД()", active)
+        self.assertIn("СНК()", active)
+
+    def test_5_9_2_kopecks_preserve_sign(self) -> None:
+        kop = _active(_code_body(self.src, "КУДиР_Копейки"))
+        self.assertIn("Окр(", kop)
+        self.assertIn("* 100", kop)
+        self.assertNotIn("0.001", kop)
+        self.assertNotIn("*100+", kop.replace(" ", ""))
+
+    def test_5_9_3_pko_normalized_kind(self) -> None:
+        kind = _code_body(self.src, "КУДиР_ВидОплаты")
+        active = _active(kind)
+        self.assertIn('Врег(СокрЛП(ВидДок))', active)
+        self.assertIn('Врег("ПКО")', active)
+        self.assertIn('Врег("ПриходныйОрдер")', active)
+        self.assertIn('Врег("ПриходныйКассовыйОрдер")', active)
+        self.assertNotIn('Найти(Врег(ВидДок), "ПриходныйОрдер")', active)
+        self.assertNotIn('Найти(Врег(ВидДок), "ПКО")', active)
+        self.assertIn("ПКО", kind)
+        pay = _code_body(self.src, "КУДиР_СобратьОплаты")
+        self.assertIn('Kind = "CASH"', pay)
+        self.assertIn('Gran = "DOCUMENT"', pay)
+        self.assertIn("КУДиР_ИдОплаты(Kind, Док, Опер)", pay)
+
+    def test_5_9_4_contract_registered_per_payment_and_ledger(self) -> None:
+        pay = _code_body(self.src, "КУДиР_СобратьОплаты")
+        self.assertIn('КУДиР_ЗапомнитьID("CONTRACT"', pay)
+        self.assertLess(
+            pay.index('КУДиР_ЗапомнитьID("CONTRACT"'),
+            pay.index('таблОплаты.ДоговорID = ""'),
+        )
+        ledger_add = _code_body(self.src, "КУДиР_ДобавитьСтрокуLedger")
+        self.assertIn('КУДиР_ЗапомнитьID("CONTRACT"', ledger_add)
+        add_doc = _code_body(self.src, "КУДиР_ДобавитьДокумент")
+        self.assertIn('КУДиР_ЗапомнитьID("CONTRACT"', add_doc)
 
 
 if __name__ == "__main__":
