@@ -1,10 +1,11 @@
-"""Этап 3 + факты 5.9.1–5.9.4: контракт выгрузки 1С по ТЗ №1. Matcher не вызывается.
+"""Этап 3 + факты 5.9 + поток 6: контракт выгрузки 1С по ТЗ №1 и №4.
 
 1С 7.7 в CI нет. Проверяем исходник `1cv77/kudir_export.txt`:
-настоящее сальдо (режим 1 + субсчета), копейки со знаком, ПКО, CONTRACT оплат,
+настоящее сальдо, копейки со знаком, ПКО, CONTRACT, schema v2, агрегаты НДС,
 периоды, два обхода, все 62, ID по типам, каталог запуска.
 Прототип `kudir_proto.txt` не является выгрузкой этапа 3.
-Контракт schema v2 / потока / L1–L3 — `tests/test_kudir_stage60_contract.py`.
+Контракт schema v2 / потока CSV — также `tests/test_kudir_stage60_contract.py`.
+L1/L2/L3 загрузчика — `tests/test_kudir_loader_source.py`.
 """
 
 from __future__ import annotations
@@ -110,18 +111,28 @@ class ExportSourceTests(unittest.TestCase):
         self.assertNotIn("двусмысленный ID", self.src)
         self.assertNotIn("C:\\Users\\Enduro", self.src)
         remember = _code_body(self.src, "КУДиР_ЗапомнитьID")
-        self.assertIn("НайтиСсылку", remember)
+        self.assertIn("ЗначениеВСтрокуВнутр", remember)
+        self.assertIn("глRegisteredIds", remember)
+        self.assertNotIn("НайтиСсылку", remember)
         self.assertNotIn("НайтиИдПоСсылке", remember)
         self.assertIn("глОшибка", self.src)
         self.assertIn(";".join(ID_MAP_FIELDS), self.src)
         self.assertNotIn('Возврат преф + "999"', self.src)
         self.assertIn("нет свободного run_id", self.src)
 
-    def test_csv_headers_match_schema_v1(self) -> None:
+    def test_csv_headers_match_schema_v2_documents(self) -> None:
         self.assertIn(";".join(PAYMENTS_FIELDS), self.src)
         self.assertIn(";".join(LEDGER_FIELDS), self.src)
-        self.assertIn(";".join(DOCUMENTS_FIELDS), self.src)
         self.assertIn(";".join(OPENING_FIELDS), self.src)
+        self.assertIn(";".join(DOCUMENTS_FIELDS), self.src)
+        self.assertIn(";".join(DOCUMENTS_FIELDS), _code_body(self.src, "КУДиР_ЗаголовокDocuments"))
+        self.assertIn("СуммаОблагаемаяКоп", DOCUMENTS_FIELDS)
+        self.assertIn("СуммаНеоблагаемаяКоп", DOCUMENTS_FIELDS)
+        self.assertIn("СуммаНДСКоп", DOCUMENTS_FIELDS)
+        self.assertEqual(
+            DOCUMENTS_FIELDS[DOCUMENTS_FIELDS.index("СуммаКоп") + 1 : DOCUMENTS_FIELDS.index("СуммаКоп") + 4],
+            ["СуммаОблагаемаяКоп", "СуммаНеоблагаемаяКоп", "СуммаНДСКоп"],
+        )
         self.assertIn('НоваяКолонка("НомерПроводкиВДокументе")', self.src)
 
     def test_documents_vid_raschetov_not_hardcoded_empty(self) -> None:
@@ -218,6 +229,13 @@ class ExportSourceTests(unittest.TestCase):
         self.assertIn('КУДиР_ЗапомнитьID("CONTRACT"', ledger_add)
         add_doc = _code_body(self.src, "КУДиР_ДобавитьДокумент")
         self.assertIn('КУДиР_ЗапомнитьID("CONTRACT"', add_doc)
+
+    def test_5_9_6_id_map_writes_internal_string(self) -> None:
+        remember = _active(_code_body(self.src, "КУДиР_ЗапомнитьID"))
+        self.assertIn("ЗначениеВСтрокуВнутр(Ссылка)", remember)
+        self.assertNotIn("СокрЛП(глТаблID.ссылка)", remember)
+        self.assertNotIn("СокрЛП(ЗначениеВСтрокуВнутр", remember)
+        self.assertIn("КУДиР_ПолеCSV(Сист)", remember)
 
 
 if __name__ == "__main__":

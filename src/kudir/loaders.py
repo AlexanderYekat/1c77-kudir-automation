@@ -94,6 +94,9 @@ def validate_bundle(bundle: ExchangeBundle) -> None:
         _flag(row, "Проведен", where)
         _flag(row, "ПомеченНаУдаление", where)
         _kop(row, "СуммаКоп", where)
+        _kop(row, "СуммаОблагаемаяКоп", where)
+        _kop(row, "СуммаНеоблагаемаяКоп", where)
+        _kop(row, "СуммаНДСКоп", where)
         doc_date = _iso_required(row, "ДатаДокумента", where)
         _iso_optional(row, "ДатаДоговора", where)
         if horizon and doc_date > horizon:

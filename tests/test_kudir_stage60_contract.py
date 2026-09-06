@@ -1,9 +1,5 @@
-"""Красный контракт этапов 6.0 и 5.9.5–5.9.6 до потоковой перестройки.
+"""Контракт этапов 6.0 и 6.1–6.9: schema v2, поток CSV, L1/L2/L3.
 
-Факты 5.9.1–5.9.4 уже закрывает `tests/test_kudir_export_source.py`.
-Этот файл фиксирует, чего в текущем `kudir_export.txt` ещё нет:
-schema v2, агрегаты НДС, поток CSV, registeredIds, L1/L2/L3, A5, A6.
-Пока этап 6 не сделан, этот модуль unittest должен быть красным.
 Не ослаблять запреты FIFO / глМаксОплат / пустой Попытка.
 """
 
@@ -48,7 +44,7 @@ def _active(src: str) -> str:
 
 
 class Stage60ExportContractTests(unittest.TestCase):
-    """6.0.1: выгрузка под schema v2 и ТЗ №4. Пока красные."""
+    """6.0.1: выгрузка под schema v2 и ТЗ №4."""
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -66,22 +62,23 @@ class Stage60ExportContractTests(unittest.TestCase):
         )
 
     def test_6_0_1_documents_vat_aggregates(self) -> None:
-        write = _active(_code_body(self.src, "КУДиР_ЗаписатьВыгрузку"))
+        hdr = _active(_code_body(self.src, "КУДиР_ЗаголовокDocuments"))
         add_doc = _active(_code_body(self.src, "КУДиР_ДобавитьДокумент"))
         for col in VAT_AGGREGATES:
             with self.subTest(col=col):
-                self.assertTrue(col in write, f"нет колонки {col} в записи documents.csv")
+                self.assertTrue(col in hdr, f"нет колонки {col} в заголовке documents.csv")
                 self.assertTrue(col in add_doc, f"нет агрегата {col} в обходе документа")
         self.assertTrue("ВыбратьСтроки" in add_doc, "нужен обход табличной части по НДС")
         self.assertTrue("ПолучитьСтроку" in add_doc, "нужен обход табличной части по НДС")
 
     def test_6_0_1_internal_string_reference(self) -> None:
-        write = _active(_code_body(self.src, "КУДиР_ЗаписатьВыгрузку"))
-        self.assertTrue("ЗначениеВСтрокуВнутр" in write, "ссылка_1С = ЗначениеВСтрокуВнутр")
+        remember = _active(_code_body(self.src, "КУДиР_ЗапомнитьID"))
+        self.assertTrue("ЗначениеВСтрокуВнутр" in remember, "ссылка_1С = ЗначениеВСтрокуВнутр")
         self.assertFalse(
-            "СокрЛП(глТаблID.ссылка)" in write,
+            "СокрЛП(глТаблID.ссылка)" in remember,
             "СокрЛП системной ссылки в id_map запрещён",
         )
+        self.assertFalse("СокрЛП(ЗначениеВСтрокуВнутр" in remember)
 
     def test_6_0_1_id_map_only_payment_document_contract(self) -> None:
         active = _active(self.src)
@@ -98,9 +95,27 @@ class Stage60ExportContractTests(unittest.TestCase):
         self.assertTrue('КУДиР_ЗапомнитьID("CONTRACT"' in active)
 
     def test_6_0_1_no_full_csv_text_for_ledger_or_id_map(self) -> None:
+        active = _active(self.src)
+        self.assertFalse("Текст = Текст" in active, "полный CSV в переменной запрещён")
         write = _active(_code_body(self.src, "КУДиР_ЗаписатьВыгрузку"))
-        self.assertFalse("Текст = Текст" in write, "полный CSV в переменной запрещён")
         self.assertTrue("WriteLine" in write, "нужен потоковый TextStream.WriteLine")
+        self.assertTrue("WriteLine" in _active(_code_body(self.src, "КУДиР_ПисатьCSVСтроку")))
+        self.assertTrue("WriteLine" in _active(_code_body(self.src, "КУДиР_ПисатьIdMapСтроку")))
+
+    def test_6_3_pass_a_before_run_id(self) -> None:
+        execute = _active(_code_body(self.src, "КУДиР_Выполнить"))
+        self.assertLess(
+            execute.index("КУДиР_СобратьКлиентов"),
+            execute.index("КУДиР_НовыйRunId"),
+        )
+        self.assertLess(
+            execute.index("КУДиР_ОсвободитьЭкспорт()"),
+            execute.index("КУДиР_ЗапуститьPython"),
+        )
+        self.assertGreater(
+            execute.rindex("КУДиР_ОсвободитьЭкспорт()"),
+            execute.index("КУДиР_СобратьСальдо"),
+        )
 
     def test_6_0_3_bans_fifo_cap_silent_try_vat_second_pass(self) -> None:
         active = _active(self.src)
@@ -114,7 +129,7 @@ class Stage60ExportContractTests(unittest.TestCase):
 
 
 class Stage60LoaderContractTests(unittest.TestCase):
-    """6.0.2 + 5.9.5 A5 + 5.9.6 A6. Пока красные."""
+    """6.0.2 + 5.9.5 A5 + 5.9.6 A6. Должны быть зелёными после 2026.09.05-02."""
 
     @classmethod
     def setUpClass(cls) -> None:

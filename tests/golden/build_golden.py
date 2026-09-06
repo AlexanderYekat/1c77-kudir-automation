@@ -1,4 +1,4 @@
-"""Собрать golden CSV schema v1. Matcher не вызывается."""
+"""Собрать golden CSV schema v2. Matcher не вызывается."""
 
 from __future__ import annotations
 
@@ -75,8 +75,22 @@ def doc(**kwargs: str) -> dict[str, str]:
         Контрагент=C1N,
         ВидРасчетовID=V1,
         ВидРасчетовСПокупателем=VN,
+        СуммаОблагаемаяКоп="0",
+        СуммаНеоблагаемаяКоп="0",
+        СуммаНДСКоп="0",
     )
     row.update(kwargs)
+    # Matching-фикстуры без явного НДС: вся сумма — необлагаемая (колонка НДС=0).
+    amount = (row.get("СуммаКоп") or "0").strip() or "0"
+    if (
+        "СуммаОблагаемаяКоп" not in kwargs
+        and "СуммаНеоблагаемаяКоп" not in kwargs
+        and "СуммаНДСКоп" not in kwargs
+        and amount != "0"
+    ):
+        row["СуммаОблагаемаяКоп"] = "0"
+        row["СуммаНеоблагаемаяКоп"] = amount
+        row["СуммаНДСКоп"] = "0"
     return row
 
 
@@ -144,7 +158,7 @@ def status(
         "historical_unresolved_count": historical_unresolved_count,
         "historical_unresolved_kopecks": historical_unresolved_kopecks,
         "parser_available": "0",
-        "schema_version": "1",
+        "schema_version": "2",
         "scoring_hash": "golden",
     }
 
@@ -180,7 +194,7 @@ def write_case(
 def q1_2026(run_id: str) -> dict[str, str]:
     return {
         "run_id": run_id,
-        "schema_version": "1",
+        "schema_version": "2",
         "encoding": "windows-1251",
         "history_start": "2025-10-01",
         "date_start": "2026-01-01",
@@ -193,7 +207,7 @@ def q1_2026(run_id: str) -> dict[str, str]:
 def q4_2025(run_id: str) -> dict[str, str]:
     return {
         "run_id": run_id,
-        "schema_version": "1",
+        "schema_version": "2",
         "encoding": "windows-1251",
         "history_start": "2025-10-01",
         "date_start": "2025-10-01",

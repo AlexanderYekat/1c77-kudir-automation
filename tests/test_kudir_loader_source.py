@@ -3,7 +3,8 @@
 1С 7.7 в CI нет. Проверяем исходник `1cv77/kudir_export.txt` и Python-сторону:
 сверка run_id, не читать объект после ошибки ID, tax_ready не блокирует matching.
 Прототип `kudir_proto.txt` не является загрузчиком этапа 5.
-L1/L2/L3, глОшибка числа и логическая CSV-запись — `tests/test_kudir_stage60_contract.py`.
+L1/L2/L3, глОшибка числа и логическая CSV-запись — этот файл и
+`tests/test_kudir_stage60_contract.py`.
 """
 
 from __future__ import annotations
@@ -45,7 +46,7 @@ class LoaderSourceTests(unittest.TestCase):
         cls.proto_load = _function_body(cls.proto, "КУДиР_ЗагрузитьИВосстановить")
 
     def test_loader_is_not_the_proto(self) -> None:
-        self.assertIn("этап5", self.src.splitlines()[0])
+        self.assertIn("этап6", self.src.splitlines()[0])
         self.assertIn("run_kudir.bat", self.src)
         self.assertNotIn("run_kudir_proto.bat", self.src)
         self.assertIn("ДокОпл.НомерДок", self.proto_load)
@@ -73,7 +74,7 @@ class LoaderSourceTests(unittest.TestCase):
         self.assertIn("python -m kudir", self.bat)
         tmp = Path(tempfile.mkdtemp(prefix="kudir_failed_"))
         self.addCleanup(shutil.rmtree, tmp, True)
-        write_kv(tmp / "manifest.csv", {"run_id": "KUDIR_TEST_001", "schema_version": "1"})
+        write_kv(tmp / "manifest.csv", {"run_id": "KUDIR_TEST_001", "schema_version": "2"})
         write_rows(
             tmp / "kudir_result.csv",
             KUDIR_RESULT_FIELDS,
@@ -136,6 +137,27 @@ class LoaderSourceTests(unittest.TestCase):
         self.assertIn("Частичная таблица отброшена", err_block)
         self.assertIn("СформироватьТаблицуДоходовЧистовая()", err_block)
         self.assertNotIn("Возврат таб", err_block.split("КонецЕсли", 1)[0])
+
+    def test_5_9_5_numeric_error_discards_whole_table(self) -> None:
+        self.assertIn("глОшибка", self.load)
+        self.assertIn("КУДиР_ЭтоЦелыеКопейки", self.load)
+        self.assertIn("дубль result_row_id", self.load)
+        self.assertIn("advance + repayment <> amount", self.load)
+        kop = _function_body(self.src, "КУДиР_КопейкиВРубли")
+        active = "\n".join(
+            line for line in kop.splitlines() if not line.lstrip().startswith("//")
+        )
+        self.assertNotIn("Возврат 0", active)
+        self.assertIn("Число(С) / 100", active)
+
+    def test_5_9_6_restore_from_id_map_logical_csv(self) -> None:
+        self.assertIn("ЗначениеИзСтрокиВнутр", self.load)
+        self.assertNotIn("КУДиР_НайтиСсылку", self.load)
+        self.assertIn("restore", self.load)
+        self.assertIn("id_map.csv", self.load)
+        self.assertIn("КУДиР_ПрочитатьЛогическуюCSVСтроку", self.src)
+        self.assertIn("неверного типа", self.load)
+        self.assertNotIn("СокрЛП(глТаблID.ссылка)", self.src)
 
 
 if __name__ == "__main__":

@@ -5,7 +5,7 @@ tax_ready;0
 unresolved_debt_kopecks;0
 unresolved_count;0
 parser_available;0
-schema_version;1
+schema_version;2
 scoring_hash;golden
 state_uncertain;1
 historical_unresolved_count;1

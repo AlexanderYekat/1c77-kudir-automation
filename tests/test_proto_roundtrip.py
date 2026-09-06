@@ -59,7 +59,7 @@ class RoundtripTests(unittest.TestCase):
             self.dir / "manifest.csv",
             {
                 "run_id": "KUDIR_PROTO_TEST_001",
-                "schema_version": "1",
+                "schema_version": "2",
                 "encoding": "windows-1251",
                 "history_start": "2025-10-01",
                 "date_start": "2026-01-01",
@@ -109,6 +109,9 @@ class RoundtripTests(unittest.TestCase):
                     ДоговорID="D|00001|243",
                     Договор="243",
                     СуммаКоп="550000",
+                    СуммаОблагаемаяКоп="0",
+                    СуммаНеоблагаемаяКоп="550000",
+                    СуммаНДСКоп="0",
                     Проведен="1",
                     ПомеченНаУдаление="0",
                 )

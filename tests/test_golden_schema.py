@@ -1,4 +1,4 @@
-"""Golden 2.1–2.9: схема CSV v1 и ожидаемые факты. Matcher не вызывается."""
+"""Golden 2.1–2.9: схема CSV v2 и ожидаемые факты. Matcher не вызывается."""
 
 from __future__ import annotations
 
@@ -93,17 +93,24 @@ class GoldenSchemaTests(unittest.TestCase):
         self.assertTrue(d.is_dir(), f"нет каталога {d}")
         return d
 
-    def test_every_case_matches_schema_v1(self) -> None:
+    def test_every_case_matches_schema_v2(self) -> None:
+        from kudir_proto.csv_io import SCHEMA_VERSION
+
         for name in CASES:
             d = self._dir(name)
             with self.subTest(name=name):
                 man = read_kv(d / "manifest.csv")
                 for key in MANIFEST_KEYS:
                     self.assertTrue((man.get(key) or "").strip(), f"{name}: пустой {key}")
+                self.assertEqual(man["schema_version"], SCHEMA_VERSION)
                 self.assertNotEqual(man["quarter_end"], man["match_horizon_end"])
                 read_rows(d / "payments.csv", PAYMENTS_FIELDS)
                 read_rows(d / "ledger62.csv", LEDGER_FIELDS)
-                read_rows(d / "documents.csv", DOCUMENTS_FIELDS)
+                docs = read_rows(d / "documents.csv", DOCUMENTS_FIELDS)
+                for row in docs:
+                    self.assertIn("СуммаОблагаемаяКоп", row)
+                    self.assertIn("СуммаНеоблагаемаяКоп", row)
+                    self.assertIn("СуммаНДСКоп", row)
                 read_rows(d / "opening_balances.csv", OPENING_FIELDS)
                 read_rows(d / "expected_kudir_result.csv", KUDIR_RESULT_FIELDS)
                 read_rows(d / "expected_matches.csv", MATCHES_FIELDS)
@@ -112,6 +119,7 @@ class GoldenSchemaTests(unittest.TestCase):
                 for key in RUN_STATUS_KEYS:
                     self.assertIn(key, st)
                 self.assertEqual(st["run_id"], man["run_id"])
+                self.assertEqual(st["schema_version"], SCHEMA_VERSION)
                 for row in read_rows(d / "expected_kudir_result.csv", KUDIR_RESULT_FIELDS):
                     self.assertNotRegex(row["СодержаниеЗаписи"], r"[\r\n]")
 
