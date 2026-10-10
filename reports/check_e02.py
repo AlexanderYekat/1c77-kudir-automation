@@ -274,6 +274,19 @@ def check_package(directory: Path) -> tuple[Findings, dict]:
         elif state not in {"WRITING", "FAILED"}:
             findings.error("CSV_INVALID", "export_status.csv", "status", f"недопустимый статус {state!r}")
 
+    log = directory / "1c_export.log"
+    log_text = log.read_bytes().decode("cp1251", "replace") if log.is_file() else None
+    end = re.findall(r"END Э0\.2 итог=(\w+)", log_text or "")
+    # A run that failed or never reached END is FAIL whatever its files hold. Files it did not create and id_map
+    # rows of the record in progress are consequences of the stop, not separate defects; written files are checked.
+    interrupted = state == "FAILED" or not end
+
+    def table(name: str, header: list[str]) -> list[dict] | None:
+        if interrupted and not (directory / name).is_file():
+            findings.info("NOT_CHECKED", name, "PACKAGE", "файл не создан: запуск прерван")
+            return None
+        return read_table(directory, name, header, findings)
+
     diagnostics = read_table(directory, "diagnostics.csv", DIAG_HEADER, findings) or []
     designed = [row for row in diagnostics if row["code"] == "COVERAGE_INCOMPLETE" and row["record_key"] == "PACKAGE"]
     reported_errors = [row for row in diagnostics if row["severity"] == "ERROR" and row not in designed]
@@ -294,7 +307,7 @@ def check_package(directory: Path) -> tuple[Findings, dict]:
     for row in reported_errors[:50]:
         findings.add("REPORTED", row["code"], row["file"], row["record_key"], f"{row['field']}: {row['message']}")
 
-    id_map = read_table(directory, "id_map.csv", ID_MAP_HEADER, findings) or []
+    id_map = table("id_map.csv", ID_MAP_HEADER) or []
     by_key: dict[tuple[str, str], dict] = {}
     position_of_k: dict[str, str] = {}
     for row in id_map:
@@ -332,7 +345,7 @@ def check_package(directory: Path) -> tuple[Findings, dict]:
             findings.error("ID_COLLISION", "id_map.csv", row["id"], f"один K с разными позициями {known!r} и {row['позиция']!r}")
     summary["id_map"] = dict(Counter(kind for kind, _ in by_key))
 
-    ids = read_table(directory, "e02_ids.csv", E02_IDS_HEADER, findings) or []
+    ids = table("e02_ids.csv", E02_IDS_HEADER) or []
     seen_ledger: set[str] = set()
     sides: dict[tuple[str, str], list[int]] = defaultdict(list)
     without_id = 0
@@ -393,7 +406,7 @@ def check_package(directory: Path) -> tuple[Findings, dict]:
         "texts_with_edge_spaces": sum(1 for row in ids for f in ("СодержаниеПроводки", "Содержание", "КомментарийДокумента") if row[f] != row[f].strip(" ")),
     }
 
-    docs = read_table(directory, "e02_docs.csv", E02_DOCS_HEADER, findings) or []
+    docs = table("e02_docs.csv", E02_DOCS_HEADER) or []
     seen_docs: set[str] = set()
     for row in docs:
         doc = row["document_id"]
@@ -413,7 +426,11 @@ def check_package(directory: Path) -> tuple[Findings, dict]:
     used = {row["source_document_id"] for row in ids} | seen_docs | {row["payment_id"] for row in ids} | {row["ДоговорID"] for row in ids}
     orphans = [key for key in by_key if key[1] not in used]
     if orphans:
-        findings.error("CSV_INVALID", "id_map.csv", orphans[0][1], f"записей id_map без ссылок из файлов набора: {len(orphans)}")
+        message = f"записей id_map без ссылок из файлов набора: {len(orphans)}"
+        if interrupted:
+            findings.info("NOT_CHECKED", "id_map.csv", orphans[0][1], message + " (запуск прерван)")
+        else:
+            findings.error("CSV_INVALID", "id_map.csv", orphans[0][1], message)
 
     positions = [row["позиция"] for row in id_map if row["entity_type"] == "DOCUMENT"]
     summary["positions"] = {
@@ -422,7 +439,7 @@ def check_package(directory: Path) -> tuple[Findings, dict]:
         "trailing_space_counts": dict(Counter(len(p) - len(p.rstrip(" ")) for p in positions)),
     }
 
-    selftest = read_table(directory, "e02_csv_selftest.csv", SELFTEST_HEADER, findings)
+    selftest = table("e02_csv_selftest.csv", SELFTEST_HEADER)
     if selftest is not None:
         got = [(row["case"], row["value"], row["length"]) for row in selftest]
         expected = [(name, value, str(len(value))) for name, value in SELFTEST_CASES]
@@ -435,22 +452,20 @@ def check_package(directory: Path) -> tuple[Findings, dict]:
 
     # Without checked objects the set shows nothing about ID stability or reference reversibility.
     not_checked = []
-    if not seen_ledger:
-        not_checked.append("нет строк проводок 62 с ledger_event_id: ID проводок, оплат и их документов не проверены")
-    if not seen_docs:
-        not_checked.append("нет документов-кандидатов: ТекущийДокумент() типизированной выборки не проверен")
-    for reason in not_checked:
-        findings.add("INCOMPLETE", "NOT_CHECKED", "e02_ids.csv", "PACKAGE", reason)
-    for kind in ("CASH", "BANK"):
-        if kind not in summary["e02_ids"]["payment_kinds"]:
-            findings.info("NOT_CHECKED", "e02_ids.csv", "PACKAGE", f"в окне нет оплат {kind}: их ID не проверены")
+    if not interrupted:
+        if not seen_ledger:
+            not_checked.append("нет строк проводок 62 с ledger_event_id: ID проводок, оплат и их документов не проверены")
+        if not seen_docs:
+            not_checked.append("нет документов-кандидатов: ТекущийДокумент() типизированной выборки не проверен")
+        for reason in not_checked:
+            findings.add("INCOMPLETE", "NOT_CHECKED", "e02_ids.csv", "PACKAGE", reason)
+        for kind in ("CASH", "BANK"):
+            if kind not in summary["e02_ids"]["payment_kinds"]:
+                findings.info("NOT_CHECKED", "e02_ids.csv", "PACKAGE", f"в окне нет оплат {kind}: их ID не проверены")
     expected_result = "FAIL" if state == "FAILED" else ("INCOMPLETE" if not_checked else "PASS")
 
-    log = directory / "1c_export.log"
-    if log.is_file():
-        text = log.read_bytes().decode("cp1251", "replace")
-        end = re.findall(r"END Э0\.2 итог=(\w+)", text)
-        window = re.findall(r"START Э0\.2 .*?окно=(\S+)", text)
+    if log_text is not None:
+        window = re.findall(r"START Э0\.2 .*?окно=(\S+)", log_text)
         summary["log_result"] = end[-1] if end else None
         summary["window"] = window[0] if window else None
         if not end:
@@ -459,7 +474,7 @@ def check_package(directory: Path) -> tuple[Findings, dict]:
             findings.error("CSV_INVALID", "1c_export.log", "PACKAGE", f"итог журнала {end[-1]}, по статусу {state!r} и составу ожидался {expected_result}")
     else:
         findings.error("CSV_INVALID", "1c_export.log", "PACKAGE", "журнал запуска отсутствует")
-    summary["verdict"] = "FAIL" if findings.errors else ("INCOMPLETE" if not_checked else "PASS")
+    summary["verdict"] = "FAIL" if findings.errors or interrupted else ("INCOMPLETE" if not_checked else "PASS")
     summary["files_sha256"] = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(directory.iterdir()) if p.is_file()}
     return findings, summary
 
@@ -654,7 +669,7 @@ def report(findings: Findings, summary: dict, json_path: str | None) -> int:
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     if json_path:
         Path(json_path).write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    if findings.errors:
+    if findings.errors or summary.get("verdict") == "FAIL":
         return 1
     return 2 if summary.get("verdict") == "INCOMPLETE" else 0
 

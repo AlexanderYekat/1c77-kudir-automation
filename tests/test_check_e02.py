@@ -191,13 +191,39 @@ class CheckE02PackageTests(unittest.TestCase):
         self.rewrite("diagnostics.csv", "WARNING;e02_ids.csv", "ERROR;e02_ids.csv")
         self.assertFails("не FAILED")
 
-    def test_failed_run_is_consistent_when_reported(self) -> None:
+    def fail_run(self) -> None:
         self.rewrite("diagnostics.csv", "WARNING;e02_ids.csv", "ERROR;e02_ids.csv")
         self.rewrite("export_status.csv", "status;WRITING", "status;FAILED")
         self.rewrite("1c_export.log", "итог=PASS", "итог=FAIL")
-        findings, _ = chk.check_package(self.run)
+
+    def test_failed_run_is_consistent_when_reported(self) -> None:
+        # Набор FAILED - всегда FAIL, даже если все файлы целы и замечаний проверки нет.
+        self.fail_run()
+        findings, summary = chk.check_package(self.run)
         self.assertEqual(findings.errors, 0, findings.items)
         self.assertTrue(any(item["severity"] == "REPORTED" for item in findings.items))
+        self.assertEqual(summary["verdict"], "FAIL")
+        self.assertEqual(chk.report(findings, summary, None), 1)
+
+    def test_failed_run_missing_files_are_consequences_not_defects(self) -> None:
+        # KUDIR4_20261010_004: сбой на e02_ids.csv - e02_docs.csv и самопроверки нет, у id_map есть записи
+        # проводки, на которой случился сбой. Это следствие остановки, а не отдельные ошибки.
+        self.fail_run()
+        (self.run / "e02_docs.csv").unlink()
+        (self.run / "e02_csv_selftest.csv").unlink()
+        findings, summary = chk.check_package(self.run)
+        self.assertEqual(findings.errors, 0, findings.items)
+        self.assertEqual(summary["verdict"], "FAIL")
+        notes = [item["message"] for item in findings.items if item["severity"] == "INFO"]
+        self.assertTrue(any("файл не создан" in note for note in notes), notes)
+        self.assertTrue(any("без ссылок из файлов набора" in note for note in notes), notes)
+        self.assertFalse(any(item["severity"] == "INCOMPLETE" for item in findings.items))
+
+    def test_failed_run_still_checks_written_files(self) -> None:
+        self.fail_run()
+        (self.run / "e02_docs.csv").unlink()
+        self.rewrite("e02_ids.csv", f'"{POS1}"', POS1.rstrip())
+        self.assertFails("позиция строки отличается")
 
     def test_side_numbers_must_be_consecutive(self) -> None:
         def change(rows):
@@ -212,9 +238,14 @@ class CheckE02PackageTests(unittest.TestCase):
         self.assertFails("без ссылок из файлов набора")
 
     def test_missing_end_line_is_reported_as_unfinished(self) -> None:
+        # Запуск без строки END (например, прерван Ctrl+Break) не даёт PASS, даже со статусом WRITING.
         self.rewrite("1c_export.log", "END Э0.2", "что-то")
-        findings, _ = chk.check_package(self.run)
+        (self.run / "e02_csv_selftest.csv").unlink()
+        findings, summary = chk.check_package(self.run)
         self.assertTrue(any(item["code"] == "RUN_NOT_FINISHED" for item in findings.items))
+        self.assertEqual(findings.errors, 0, findings.items)
+        self.assertEqual(summary["verdict"], "FAIL")
+        self.assertEqual(chk.report(findings, summary, None), 1)
 
     def test_compare_identical_and_changed(self) -> None:
         other = self.tmp / "KUDIR4_20261010_002"

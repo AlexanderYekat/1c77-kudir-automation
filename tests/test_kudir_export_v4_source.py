@@ -136,6 +136,19 @@ class ExportV4SourceTests(unittest.TestCase):
         self.assertIn("гл4ЗаписейИд = 0;", reset)
         self.assertIn("гл4ЗаписейДок = 0;", reset)
 
+    def test_v4_does_not_query_metadata(self) -> None:
+        # Запуск KUDIR4_20261010_001: Метаданные.Документ() без параметра вернул количество, Получить() у числа
+        # упал. Блок КУДиР4_ определяет наличие вида и реквизита чтением в Попытка, а не метаданными.
+        self.assertNotIn("КУДиР_ЕстьВидДокумента", self.v4)
+        self.assertNotIn("КУДиР_ЕстьРеквизитДокумента", self.v4)
+        self.assertNotIn("Метаданные.", self.v4)
+        # Комментарий есть у всех документов (владелец, 10.10.2026): читается напрямую, без проверки наличия.
+        comment = active(body(self.src, "КУДиР4_КомментарийДок"))
+        self.assertIn('Возврат "" + Ссылка.Комментарий;', comment)
+        self.assertNotIn("Попытка", comment)
+        kind = active(body(self.src, "КУДиР4_ОбойтиВид"))
+        self.assertLess(kind.index("Попытка"), kind.index('СоздатьОбъект("Документ." + ИмяВида)'))
+
     def test_table_columns_exist(self) -> None:
         import check_e01 as base
         self.assertEqual(chk.table_column_mismatches(self.src, base.TOKEN), [])
