@@ -55,7 +55,7 @@ PAYMENT_FIELDS = [
 ]
 ROLES = {"CASH_IN", "CASH_OUT", "REVERSAL", "NONCASH", "UNKNOWN"}
 MONEY_ROLES = {"CASH_IN", "CASH_OUT"}
-SCOPE_ACCOUNTS = {"62.1", "62.2"}
+SCOPE_ACCOUNTS = ("62.1", "62.2")
 # №1 §14: document kind -> payment kind. Compared case-insensitively, as КУДиР4_ВидОплаты does with Врег.
 PAYMENT_KIND_OF_DOC = {"ПРИХОДНЫЙОРДЕР": "CASH", "РАСХОДНЫЙОРДЕР": "CASH", "ВЫПИСКА": "BANK", "ОПЕРАЦИЯ": "MANUAL"}
 GRANULARITY = {"CASH": "DOCUMENT", "BANK": "POSTING", "MANUAL": "POSTING"}
@@ -67,6 +67,14 @@ PRIMARY_CODES = {"PRIMARY_NOT_CONNECTED", "PRIMARY_PARTIAL", "PRIMARY_NOT_FOUND"
 def is_money(account: str) -> bool:
     # КУДиР_ЭтоДенежныйСчет: 50/51/55 and their subaccounts (№1 §4).
     return account.strip()[:2] in {"50", "51", "55"}
+
+
+def scope_account(account: str) -> str:
+    """№1 §4: 62.1, 62.2 and their subaccounts (62.1.1, ...) are in scope - КУДиР4_СубсчетОбласти; "" - outside."""
+    for base in SCOPE_ACCOUNTS:
+        if account == base or account.startswith(base + "."):
+            return base
+    return ""
 
 
 def is_62(account: str) -> bool:
@@ -89,6 +97,10 @@ def expected_role(side: str, other_account: str, doc_kind: str, amount: int) -> 
         return "NONCASH", ""
     if not payment_kind(doc_kind):
         return "UNKNOWN", f"денежная корреспонденция в документе вида {doc_kind!r} вне перечня №1 §14"
+    if payment_kind(doc_kind) == "MANUAL":
+        # Owner's decision 10.10.2026 (KP0.3): a money posting of a manual operation is disputed - in the base
+        # these are "СОПОСТАВЛЕНИЕ ДОГОВОРОВ", storno and re-posting of an advance through 51, not new money.
+        return "UNKNOWN", "денежная проводка ручной операции"
     if side == "K":
         if doc_kind.upper() == "РАСХОДНЫЙОРДЕР":
             return "UNKNOWN", "поступление в расходном кассовом ордере"
@@ -175,7 +187,7 @@ def check_ledger(rows: list[dict], by_key: dict, diag: list[dict], findings: Fin
             findings.error("CSV_INVALID", LEDGER_FILE, led, "пустой счёт проводки")
         if row["Счет62"] != (row["СчетДебета"] if side == "D" else row["СчетКредита"]) or not is_62(row["Счет62"]):
             findings.error("CSV_INVALID", LEDGER_FILE, led, f"Счет62 {row['Счет62']!r} не счёт 62 стороны {side}")
-        if row["Счет62"] not in SCOPE_ACCOUNTS:
+        if not scope_account(row["Счет62"]):
             out_of_scope.add(row["Счет62"])
         other = other_account(row)
 
@@ -264,32 +276,48 @@ def check_ledger(rows: list[dict], by_key: dict, diag: list[dict], findings: Fin
         elif row["ВидРасчетовСПокупателем"]:
             findings.error("CSV_INVALID", LEDGER_FILE, led, "вид расчётов без ВидРасчетовID")
 
-    # Every 62 side of a posting is present once, sides are numbered 1..m, D before K (№1 §§7, 12).
+    # Every 62 side of every correspondence is present once, sides are numbered 1..m within the document and
+    # posting number, D before K (№1 §§7, 12). A complex posting holds several correspondences under one number:
+    # its rows are split into correspondences in file order - a 62 -> 62 correspondence gives a D row followed
+    # by a K row with the same accounts and amount, any other gives one row of the 62 side.
     transfers = {"postings": 0, "same_customer": 0, "between_customers": 0}
+    complex_postings = 0
     for (k, posting), sides in postings.items():
         key = f"LED|{k}|{posting}"
         numbers = [parse_id(row["ledger_event_id"])["n"] for row in sides]
         if numbers != [str(n) for n in range(1, len(sides) + 1)]:
             findings.error("ID_COLLISION", LEDGER_FILE, key, f"N стороны не 1..m подряд: {numbers}")
-        first = sides[0]
-        if any((row["СчетДебета"], row["СчетКредита"], row["СуммаКоп"], row["ДатаОперации"]) != (first["СчетДебета"], first["СчетКредита"], first["СуммаКоп"], first["ДатаОперации"]) for row in sides):
-            findings.error("CSV_INVALID", LEDGER_FILE, key, "стороны одной проводки различаются счетами/суммой/датой")
-            continue
-        expected_sides = ["D"] * is_62(first["СчетДебета"]) + ["K"] * is_62(first["СчетКредита"])
-        if [row["Сторона62"] for row in sides] != expected_sides:
-            findings.error("CSV_INVALID", LEDGER_FILE, key, f"стороны {[row['Сторона62'] for row in sides]}, по счетам ожидались {expected_sides}: сторона потеряна или задвоена")
-        if len(expected_sides) == 2:
-            transfers["postings"] += 1
-            transfers["same_customer" if sides[0]["КонтрагентID"] == sides[-1]["КонтрагентID"] else "between_customers"] += 1
+        if any(row["ДатаОперации"] != sides[0]["ДатаОперации"] for row in sides):
+            findings.error("CSV_INVALID", LEDGER_FILE, key, "строки одной проводки различаются датой операции")
+        correspondences = 0
+        i = 0
+        while i < len(sides):
+            row = sides[i]
+            correspondences += 1
+            if is_62(row["СчетДебета"]) and is_62(row["СчетКредита"]):
+                pair = sides[i:i + 2]
+                same = len(pair) == 2 and all((r["СчетДебета"], r["СчетКредита"], r["СуммаКоп"]) == (row["СчетДебета"], row["СчетКредита"], row["СуммаКоп"]) for r in pair)
+                if not same or [r["Сторона62"] for r in pair] != ["D", "K"]:
+                    findings.error("CSV_INVALID", LEDGER_FILE, row["ledger_event_id"], f"у корреспонденции {row['СчетДебета']} -> {row['СчетКредита']} нет пары сторон D, K подряд: сторона потеряна или задвоена")
+                    i += 1
+                    continue
+                transfers["postings"] += 1
+                transfers["same_customer" if pair[0]["КонтрагентID"] == pair[1]["КонтрагентID"] else "between_customers"] += 1
+                i += 2
+                continue
+            expected = "D" if is_62(row["СчетДебета"]) else "K"
+            if row["Сторона62"] != expected:
+                findings.error("CSV_INVALID", LEDGER_FILE, row["ledger_event_id"], f"сторона {row['Сторона62']}, по счетам {row['СчетДебета']} -> {row['СчетКредита']} ожидалась {expected}")
+            i += 1
+        complex_postings += correspondences > 1
 
-    # Payments: BANK/MANUAL - one posting, one 62 side; CASH - one document (№1 §§7, 12.1).
+    # Payments: CASH - one document; BANK/MANUAL - one posting number, every money correspondence of a complex
+    # posting is its own row and counts once (№1 §§7, 12.1).
     money = Counter()
     per_kind = Counter()
     for payment, members in payments.items():
         kind = members[0]["PaymentKind"]
         per_kind[kind] += 1
-        if kind != "CASH" and len(members) != 1:
-            findings.error("CSV_INVALID", LEDGER_FILE, payment, f"у {kind}-оплаты {len(members)} строк, ожидалась одна сторона проводки")
         for row in members:
             money[(kind, row["MovementRole"])] += int(row["СуммаКоп"])
 
@@ -325,6 +353,7 @@ def check_ledger(rows: list[dict], by_key: dict, diag: list[dict], findings: Fin
         "money_kopecks": {"cash_in": cash_in, "cash_out": cash_out, "net": cash_in - cash_out,
                           "by_kind": {f"{kind}:{role}": v for (kind, role), v in sorted(money.items())}},
         "transfers_62_62": transfers,
+        "complex_postings": complex_postings,
         "multi_payment_statements": sum(1 for n in Counter(p.split("|")[1] for p in payments if p.startswith("BANK|")).values() if n > 1),
         "texts_with_edge_spaces": sum(1 for row in rows for f in ("СодержаниеПроводки", "Содержание") if row[f] != row[f].strip(" ")),
         "multi_line_texts": sum(1 for row in rows for f in ("СодержаниеПроводки", "Содержание", "КомментарийДокумента", "ПервичныйДокумент") if "\n" in row[f] or "\r" in row[f]),
@@ -351,8 +380,10 @@ def check_primary(row: dict, kind: str, payment: str, led: str, has: set, findin
             findings.error("CSV_INVALID", LEDGER_FILE, led, f"пустое {field} {kind}-оплаты без диагностики {sorted(allowed)}")
     if row["ДатаДокументаОплаты"] and not DATE.fullmatch(row["ДатаДокументаОплаты"]):
         findings.error("CSV_INVALID", LEDGER_FILE, led, f"ДатаДокументаОплаты {row['ДатаДокументаОплаты']!r}")
+    # A real payment order may carry the same number and date as the statement: equality alone does not prove
+    # substitution (№1 §18), so it is shown for manual review, not reported as an error.
     if row["НомерДокументаОплаты"] and (row["НомерДокументаОплаты"], row["ДатаДокументаОплаты"]) == (row["НомерДокумента"], row["ДатаДокумента"]):
-        findings.error("CSV_INVALID", LEDGER_FILE, led, "первичка заменена реквизитами выписки/операции (№1 §§18, 29)")
+        findings.info("PRIMARY_EQUALS_SOURCE", LEDGER_FILE, payment, "номер и дата первички совпадают с реквизитами выписки/операции: сверить с платёжным документом")
 
 
 def check_package(directory: Path) -> tuple[Findings, dict]:
@@ -555,8 +586,8 @@ def sheet(directory: Path) -> str:
                      pick(lambda d: kind(d) == "CASH", 3))
     lines += section("4. Банковские выписки (BANK)", "Откройте выписку: каждая проводка с 51 — отдельная оплата со своим номером проводки. Сверьте число оплат, суммы, покупателей и договоры. Первичка пуста: функция владельца не подключена (PRIMARY_NOT_CONNECTED).",
                      bank_pick)
-    lines += section("5. Ручные операции с деньгами (MANUAL)", "Откройте операцию: денежная проводка — оплата MANUAL по номеру проводки, первичка пуста.",
-                     pick(lambda d: kind(d) == "MANUAL" and any(r["payment_id"] for r in d), 3))
+    lines += section("5. Ручные операции с деньгами", "Денежная проводка ручной «Операции» — UNKNOWN без оплаты (решение владельца 10.10.2026): оплата это, перенос между договорами или корректировка, решает бухгалтер. Сверьте суммы со знаком, счета, покупателя и договор.",
+                     [doc_id for doc_id, d in docs.items() if kind(d) == "MANUAL" and any(is_money(other_account(r)) for r in d)][:10])
     lines += section("6. Денежные возвраты (CASH_OUT)", "Дт 62 — Кт 50/51/55 с положительной суммой. Подтвердите, что это фактическая выдача денег покупателю (возврат), а не другое событие.",
                      [doc_id for doc_id, d in docs.items() if any(r["MovementRole"] == "CASH_OUT" for r in d)][:10], only=lambda r: r["MovementRole"] == "CASH_OUT")
     lines += section("7. Неустановленная роль (UNKNOWN)", "Отрицательные суммы и денежные корреспонденции вне перечня видов. Движение влияет на сальдо, оплатой не считается до решения бухгалтера. Сверьте сумму со знаком и счета.",

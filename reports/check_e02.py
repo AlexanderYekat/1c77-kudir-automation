@@ -34,6 +34,9 @@ ERT = ROOT / "1cv77-extforms" / "kudir_export.ert"
 # E0.1 was accepted on this commit; identifiers mixing Latin and Cyrillic that are new since then are flagged.
 BASELINE_COMMIT = "ae02186"
 FORM_ACTION = "ВыгрузкаЭ02()"
+# Project guard, not a claim about the exact platform boundary: a 590-character
+# line failed in the owner's 1C 7.7 configurator; the accepted E0.2 module had at most 479.
+MAX_SOURCE_LINE_LENGTH = 500
 
 MANIFEST_KEYS = [
     "run_id", "schema_version", "identity_scheme", "encoding", "source_id", "account_scope", "currency",
@@ -620,6 +623,12 @@ def table_column_mismatches(text: str, token) -> list[tuple[int, str, str]]:
     return result
 
 
+def source_line_length_issues(text: str) -> list[tuple[int, int]]:
+    # Physical lines, including comments and literals; CR/LF are not part of the length.
+    return [(number, len(line)) for number, line in enumerate(text.splitlines(), 1)
+            if len(line) > MAX_SOURCE_LINE_LENGTH]
+
+
 def check_static(form_action: str = FORM_ACTION) -> tuple[Findings, dict]:
     sys.path.insert(0, str(HERE))
     import check_e01 as base  # generic narrow checks written for E0.1
@@ -629,6 +638,10 @@ def check_static(form_action: str = FORM_ACTION) -> tuple[Findings, dict]:
     definitions, duplicates, forward = base.routines(text)
     helper = base.syntax_helper_names()
     summary = {"module": str(MODULE.relative_to(ROOT)), "version": text.splitlines()[0], "routines": len(definitions)}
+    summary["max_source_line_length"] = max(map(len, text.splitlines()), default=0)
+    for number, length in source_line_length_issues(text):
+        findings.error("STATIC", MODULE.name, f"line {number}",
+                       f"длина физической строки {length}, защитный предел проекта {MAX_SOURCE_LINE_LENGTH}: разбейте выражение на несколько строк")
     summary["v4_routines"] = sorted(name for name in definitions if name.startswith("КУДиР4_"))
     for name in duplicates:
         findings.error("STATIC", MODULE.name, name, "процедура определена дважды")

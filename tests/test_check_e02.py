@@ -299,6 +299,10 @@ class StaticRulesTests(unittest.TestCase):
         text = 'Процедура П(А, Б)\nКонецПроцедуры\nП(1, "x,y", 3);\nП(1, "a,b");\nП(Ф(1, 2), 3);\n'
         self.assertEqual(chk.argument_count_mismatches(text, self.base.TOKEN), [(3, "П", 3, 2)])
 
+    def test_long_physical_source_lines_are_reported(self) -> None:
+        text = "Я" * 500 + "\r\n" + "Я" * 501 + "\n" + "//" + "x" * 588 + "\n"
+        self.assertEqual(chk.source_line_length_issues(text), [(2, 501), (3, 590)])
+
     def test_silent_handler_is_reported(self) -> None:
         text = "Попытка\n\tА = 1;\nИсключение\n\tА = 2;\nКонецПопытки;\nПопытка\nИсключение\n\tСообщить(ОписаниеОшибки());\nКонецПопытки;\n"
         self.assertEqual(chk.silent_handlers(text, self.base.code_only), [3])

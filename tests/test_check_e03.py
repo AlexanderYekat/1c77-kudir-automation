@@ -102,7 +102,8 @@ def ledger_rows() -> list[list[str]]:
         row("S", 2, 1, "62.2", "62.1", "D", 1650000, C2, D2, "", "NONCASH"),
         row("S", 2, 2, "62.2", "62.1", "K", 1650000, C2, D2, vr, "NONCASH"),
         row("M", 7, 1, "51", "62.1", "K", -50000, C1, D1, vr, "UNKNOWN"),
-        row("M", 8, 1, "51", "62.1", "K", 70000, C1, D1, vr, "CASH_IN", "MANUAL"),
+        # Ручная операция: денежная проводка спорная, оплата MANUAL не назначается (решение владельца 10.10.2026).
+        row("M", 8, 1, "51", "62.1", "K", 70000, C1, D1, vr, "UNKNOWN"),
     ]
 
 
@@ -113,9 +114,8 @@ def id_map_rows() -> list[list[str]]:
         rows.append(["DOCUMENT", f"DOC|{K[doc]}", vid, number, date, POS[doc], "", RAW[doc]])
         if doc == "P":
             rows.append(["PAYMENT", f"CASH|{K[doc]}", vid, number, date, POS[doc], "", RAW[doc]])
-        for posting in {"B": (2, 10, 11), "M": (8,)}.get(doc, ()):
-            kind = "BANK" if doc == "B" else "MANUAL"
-            rows.append(["PAYMENT", f"{kind}|{K[doc]}|{posting}", vid, number, date, POS[doc], str(posting), RAW[doc]])
+        for posting in {"B": (2, 10, 11)}.get(doc, ()):
+            rows.append(["PAYMENT", f"BANK|{K[doc]}|{posting}", vid, number, date, POS[doc], str(posting), RAW[doc]])
         if doc == "P":
             rows.append(["CONTRACT", D1, "", "Договор 1", "2026-01-10", "", "", '{"B","0","0","55","0","0","     7   "}'])
         if doc == "B":
@@ -129,10 +129,9 @@ def diagnostics_rows() -> list[list[str]]:
     for posting in (2, 10, 11):
         for name in ("НомерДокументаОплаты", "ДатаДокументаОплаты"):
             rows.append(["WARNING", "ledger62.csv", f"BANK|{K['B']}|{posting}", name, "PRIMARY_NOT_CONNECTED", "функция не подключена"])
-    rows += [["WARNING", "ledger62.csv", f"LED|{K['M']}|7|1", "MovementRole", "MOVEMENT_ROLE_UNKNOWN", "отрицательная сумма"],
-             ["WARNING", "ledger62.csv", f"LED|{K['M']}|7|1", "payment_id", "PAYMENT_MEMBERSHIP_UNKNOWN", "роль не установлена"]]
-    for name in ("НомерДокументаОплаты", "ДатаДокументаОплаты"):
-        rows.append(["WARNING", "ledger62.csv", f"MANUAL|{K['M']}|8", name, "SOURCE_FIELD_UNAVAILABLE", "нет источника"])
+    for posting in (7, 8):
+        rows += [["WARNING", "ledger62.csv", f"LED|{K['M']}|{posting}|1", "MovementRole", "MOVEMENT_ROLE_UNKNOWN", "сторно или ручная операция"],
+                 ["WARNING", "ledger62.csv", f"LED|{K['M']}|{posting}|1", "payment_id", "PAYMENT_MEMBERSHIP_UNKNOWN", "роль не установлена"]]
     return rows
 
 
@@ -190,9 +189,11 @@ class CheckE03PackageTests(unittest.TestCase):
         findings, summary = chk.check_package(self.run)
         self.assertEqual(findings.errors, 0, findings.items)
         ledger = summary["ledger62"]
-        self.assertEqual(ledger["payments"], {"CASH": 1, "BANK": 3, "MANUAL": 1})
-        # Деньги: 6000+4000 (ПКО, перенос не входит) + 10000+5000 (выписка) + 700 (ручная) = 25700 руб, возврат 2000.
-        self.assertEqual(ledger["money_kopecks"]["cash_in"], 2570000)
+        self.assertEqual(ledger["payments"], {"CASH": 1, "BANK": 3})
+        # Деньги: 6000+4000 (ПКО, перенос не входит) + 10000+5000 (выписка) = 25000 руб, возврат 2000;
+        # ручная операция в деньги не входит (UNKNOWN).
+        self.assertEqual(ledger["money_kopecks"]["cash_in"], 2500000)
+        self.assertEqual(ledger["roles"]["UNKNOWN"], {"rows": 2, "kopecks": 20000})
         self.assertEqual(ledger["money_kopecks"]["cash_out"], 200000)
         self.assertEqual(ledger["transfers_62_62"], {"postings": 2, "same_customer": 2, "between_customers": 0})
         self.assertEqual(ledger["multi_payment_statements"], 1)
@@ -233,9 +234,60 @@ class CheckE03PackageTests(unittest.TestCase):
         self.drop_diag(lambda r: r[2] == f"BANK|{K['B']}|10" and r[3] == "ДатаДокументаОплаты")
         self.assertFails("пустое ДатаДокументаОплаты BANK-оплаты без диагностики")
 
-    def test_primary_replaced_by_statement_is_error(self) -> None:
+    def test_primary_equal_to_statement_is_not_an_error(self) -> None:
+        # Ревью 508cd54: платёжный документ может иметь тот же номер и дату, что и выписка; FOUND не должен
+        # давать FAIL. Совпадение показывается для ручной сверки.
         self.edit_ledger(4, НомерДокументаОплаты="0012", ДатаДокументаОплаты="2026-02-03")
-        self.assertFails("первичка заменена")
+        self.drop_diag(lambda r: r[2] == f"BANK|{K['B']}|2")
+        findings, summary = chk.check_package(self.run)
+        self.assertEqual(findings.errors, 0, findings.items)
+        self.assertTrue(any(i["code"] == "PRIMARY_EQUALS_SOURCE" and i["severity"] == "INFO" for i in findings.items))
+        self.assertEqual(summary["verdict"], "PASS")
+
+    def complex_posting(self, *extra) -> None:
+        # Сложная проводка: несколько корреспонденций под одним номером, N подряд (№1 §§7, 12.1).
+        def change(rows):
+            return rows[:7] + list(extra) + rows[7:]
+        self.edit("ledger62.csv", chk.LEDGER_HEADER, change)
+        mapped = ["PAYMENT", f"BANK|{K['B']}|12", "Выписка", "0012", "2026-02-03", POS["B"], "12", RAW["B"]]
+        self.edit("id_map.csv", e02.ID_MAP_HEADER, lambda rows: rows + [mapped])
+        self.edit("diagnostics.csv", e02.DIAG_HEADER, lambda rows: rows + [
+            ["WARNING", "ledger62.csv", f"BANK|{K['B']}|12", name, "PRIMARY_NOT_CONNECTED", "функция не подключена"]
+            for name in ("НомерДокументаОплаты", "ДатаДокументаОплаты")])
+
+    def test_complex_posting_with_several_payments_passes(self) -> None:
+        vr = "VR|ПокупателиОтгрузка"
+        self.complex_posting(row("B", 12, 1, "51", "62.1", "K", 300000, C1, D1, vr, "CASH_IN", "BANK"),
+                             row("B", 12, 2, "51", "62.2", "K", 200000, C2, D2, "", "CASH_IN", "BANK"))
+        findings, summary = chk.check_package(self.run)
+        self.assertEqual(findings.errors, 0, findings.items)
+        ledger = summary["ledger62"]
+        self.assertEqual(ledger["payments"]["BANK"], 4)
+        self.assertEqual(ledger["money_kopecks"]["cash_in"], 2500000 + 500000)
+        self.assertEqual(ledger["complex_postings"], 1)
+
+    def test_complex_posting_with_transfer_passes(self) -> None:
+        vr = "VR|ПокупателиОтгрузка"
+        self.complex_posting(row("B", 12, 1, "51", "62.1", "K", 300000, C1, D1, vr, "CASH_IN", "BANK"),
+                             row("B", 12, 2, "62.2", "62.1", "D", 100000, C1, D1, "", "NONCASH"),
+                             row("B", 12, 3, "62.2", "62.1", "K", 100000, C1, D1, vr, "NONCASH"))
+        self.edit("diagnostics.csv", e02.DIAG_HEADER, lambda rows: rows + [["WARNING", "ledger62.csv", f"DOC|{K['B']}", "payment_id", "PAYMENT_MEMBERSHIP_UNKNOWN", "неденежные стороны в выписке"]])
+        findings, summary = chk.check_package(self.run)
+        self.assertEqual(findings.errors, 0, findings.items)
+        self.assertEqual(summary["ledger62"]["transfers_62_62"]["postings"], 3)
+
+    def test_complex_posting_lost_transfer_side_is_error(self) -> None:
+        vr = "VR|ПокупателиОтгрузка"
+        self.complex_posting(row("B", 12, 1, "62.2", "62.1", "D", 100000, C1, D1, "", "NONCASH"),
+                             row("B", 12, 2, "51", "62.1", "K", 300000, C1, D1, vr, "CASH_IN", "BANK"))
+        self.assertFails("нет пары сторон D, K подряд")
+
+    def test_subaccount_of_62_1_is_in_scope(self) -> None:
+        # Ревью 508cd54: подчинённые счета 62.1/62.2 входят в область (№1 §4), это не COVERAGE_INCOMPLETE.
+        self.edit_ledger(7, СчетДебета="62.1.1", Счет62="62.1.1")
+        findings, summary = chk.check_package(self.run)
+        self.assertEqual(findings.errors, 0, findings.items)
+        self.assertIn("62.1.1", summary["ledger62"]["turnovers_kopecks"])
 
     def test_cash_primary_is_the_cash_document(self) -> None:
         self.edit_ledger(0, НомерДокументаОплаты="")
@@ -340,10 +392,16 @@ class RoleRuleTests(unittest.TestCase):
             (("K", "62.2", "РасходнаяНакладная", 100), "NONCASH"),
             (("D", "90.1.1", "РасходнаяНакладная", -100), "UNKNOWN"),
             (("K", "57.3", "Операция", 100), "NONCASH"),
-            (("K", "51", "операция", 100), "CASH_IN"),
+            (("K", "51", "операция", 100), "UNKNOWN"),
+            (("D", "51", "Операция", 100), "UNKNOWN"),
+            (("D", "62.1", "Операция", 100), "NONCASH"),
         ]
         for args, role in cases:
             self.assertEqual(chk.expected_role(*args)[0], role, args)
+
+    def test_scope_accounts(self) -> None:
+        for account, base in (("62.1", "62.1"), ("62.1.1", "62.1"), ("62.2.3", "62.2"), ("62", ""), ("62.3", ""), ("62.10", ""), ("62.21", "")):
+            self.assertEqual(chk.scope_account(account), base, account)
 
     def test_rubles(self) -> None:
         self.assertEqual(chk.rub(-1), "-0,01")

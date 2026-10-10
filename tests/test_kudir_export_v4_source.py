@@ -32,7 +32,9 @@ def active(text: str) -> str:
 
 
 def returned_literal(src: str, name: str) -> str:
-    return re.search(r'Возврат "([^"]*)";', body(src, name))[1]
+    # Заголовок может быть суммой литералов на нескольких физических строках 1С.
+    expression = re.search(r'Возврат\s+((?:"[^"]*"\s*\+\s*)*"[^"]*")\s*;', body(src, name))[1]
+    return "".join(re.findall(r'"([^"]*)"', expression))
 
 
 class ExportV4SourceTests(unittest.TestCase):
@@ -46,6 +48,9 @@ class ExportV4SourceTests(unittest.TestCase):
         self.assertEqual(returned_literal(self.src, "КУДиР4_ЗаголовокДиаг").split(";"), chk.DIAG_HEADER)
         self.assertEqual(returned_literal(self.src, "КУДиР4_ЗаголовокДвижений").split(";"), chk3.LEDGER_HEADER)
         self.assertEqual(returned_literal(self.src, "КУДиР4_ЗаголовокСамопроверки").split(";"), chk.SELFTEST_HEADER)
+
+    def test_source_has_no_overlong_physical_lines(self) -> None:
+        self.assertEqual(chk.source_line_length_issues(self.src), [])
 
     def test_manifest_keys_in_contract_order(self) -> None:
         keys = re.findall(r'TS\.WriteLine\("(\w+);', body(self.src, "КУДиР4_ЗаписатьМанифест"))
@@ -190,6 +195,11 @@ class ExportLedgerSourceTests(unittest.TestCase):
         self.assertNotIn("REVERSAL", self.v4)
         self.assertIn('В = Врег("РасходныйОрдер")', self.role)
         self.assertIn('В = Врег("ПриходныйОрдер")', self.role)
+        # Решение владельца 10.10.2026: денежная проводка ручной «Операции» спорная, оплата MANUAL не назначается.
+        manual = self.role.index('Если ВидОпл = "MANUAL" Тогда')
+        self.assertLess(self.role.index("Если СтрДлина(ВидОпл) = 0 Тогда"), manual)
+        self.assertLess(manual, self.role.index('Если Сторона = "K" Тогда'))
+        self.assertIn('Возврат "UNKNOWN";', self.role[manual:self.role.index('Если Сторона = "K" Тогда')])
 
     def test_payment_id_only_for_money_roles(self) -> None:
         guard = self.side.index('Если (Роль = "CASH_IN") Или (Роль = "CASH_OUT") Тогда')
@@ -222,7 +232,14 @@ class ExportLedgerSourceTests(unittest.TestCase):
         self.assertNotRegex(self.v4, r"\bМакс\(|\bМин\(")
 
     def test_out_of_scope_account_is_error(self) -> None:
-        self.assertIn('(Счет62 <> "62.1") И (Счет62 <> "62.2")', self.side)
+        # Подчинённые счета 62.1/62.2 входят в область (№1 §4; ревью 508cd54), прочие 62 - ERROR.
+        scope = active(body(self.src, "КУДиР4_СубсчетОбласти"))
+        self.assertIn('(Счет = "62.1") Или (Лев(Счет, 5) = "62.1.")', scope)
+        self.assertIn('(Счет = "62.2") Или (Лев(Счет, 5) = "62.2.")', scope)
+        self.assertIn("Область = КУДиР4_СубсчетОбласти(Счет62);", self.side)
+        self.assertIn("Если СтрДлина(Область) = 0 Тогда", self.side)
+        self.assertIn('Если Область <> "62.2" Тогда', self.side)
+        self.assertNotIn('Счет62 <> "62.', self.side)
         self.assertIn('"COVERAGE_INCOMPLETE", "движение на счёте "', self.side)
 
     def test_full_walk_debit_side_first(self) -> None:
