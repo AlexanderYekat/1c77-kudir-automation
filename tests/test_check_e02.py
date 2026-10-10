@@ -117,6 +117,28 @@ class CheckE02PackageTests(unittest.TestCase):
         self.assertEqual(summary["positions"]["with_trailing_spaces"], 3)
         self.assertEqual(summary["e02_ids"]["multi_line_texts"], 4)
         self.assertEqual(summary["log_result"], "PASS")
+        self.assertEqual(summary["verdict"], "PASS")
+        self.assertEqual(chk.report(findings, summary, None), 0)
+
+    def empty_window(self) -> None:
+        # Окно без проводок 62 и документов-кандидатов: ошибок нет, но и проверенных объектов нет.
+        self.edit("e02_ids.csv", chk.E02_IDS_HEADER, lambda rows: [])
+        self.edit("e02_docs.csv", chk.E02_DOCS_HEADER, lambda rows: [])
+        self.edit("id_map.csv", chk.ID_MAP_HEADER, lambda rows: [])
+        self.edit("diagnostics.csv", chk.DIAG_HEADER, lambda rows: rows[:1])
+
+    def test_empty_window_is_incomplete_not_pass(self) -> None:
+        self.empty_window()
+        self.rewrite("1c_export.log", "итог=PASS", "итог=INCOMPLETE")
+        findings, summary = chk.check_package(self.run)
+        self.assertEqual(findings.errors, 0, findings.items)
+        self.assertEqual(summary["verdict"], "INCOMPLETE")
+        self.assertEqual(len([i for i in findings.items if i["severity"] == "INCOMPLETE"]), 2)
+        self.assertEqual(chk.report(findings, summary, None), 2)
+
+    def test_empty_window_reported_as_pass_is_error(self) -> None:
+        self.empty_window()
+        self.assertFails("ожидался INCOMPLETE")
 
     def test_trimmed_position_is_error(self) -> None:
         self.rewrite("e02_ids.csv", f'"{POS1}"', POS1.rstrip())
@@ -205,6 +227,15 @@ class CheckE02PackageTests(unittest.TestCase):
         findings, summary = chk.compare_packages(self.run, other)
         self.assertEqual(summary["id_map.csv"]["changed_fields"], {"позиция": 1})
 
+    def test_compare_requires_same_source(self) -> None:
+        # K устойчив только внутри одной области source_id: наборы разных баз не сравниваются.
+        other = self.tmp / "KUDIR4_20261010_002"
+        shutil.copytree(self.run, other)
+        text = (other / "manifest.csv").read_bytes().decode("cp1251").replace("source_id;ctoksm-buh", "source_id;other-base")
+        (other / "manifest.csv").write_bytes(text.encode("cp1251"))
+        findings, _ = chk.compare_packages(self.run, other)
+        self.assertTrue(any(i["key"] == "source_id" and i["severity"] == "ERROR" for i in findings.items), findings.items)
+
 
 class ParseCsvTests(unittest.TestCase):
     def test_quoted_line_breaks_and_quotes_are_kept(self) -> None:
@@ -244,6 +275,12 @@ class StaticRulesTests(unittest.TestCase):
     def test_mixed_script_identifier(self) -> None:
         # Латинская K в кириллическом имени - типичная ошибка, которую компилятор 1С примет за новую переменную.
         self.assertEqual(chk.mixed_identifiers("Ключ = 1;\nKлюч = 2;\nFSO = 3;", self.base.code_only), {"Kлюч"})
+
+    def test_table_column_typo(self) -> None:
+        # Опечатка коммита 5fb7f92: колонка ИмяСлучая создана, а присваивалась т.ИмяСлучаяСлучая.
+        text = ('т = СоздатьОбъект("ТаблицаЗначений");\nт.НоваяКолонка("ИмяСлучая");\nт.НоваяСтрока();\n'
+                'т.ИмяСлучая = "a";\nт.ИмяСлучаяСлучая = "b";\nт.НомерСтроки = 1;\nА = "т.Нет";\n')
+        self.assertEqual(chk.table_column_mismatches(text, self.base.TOKEN), [(5, "т", "ИмяСлучаяСлучая")])
 
 
 if __name__ == "__main__":

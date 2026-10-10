@@ -12,7 +12,8 @@ package - checks one directory written by the "Набор Э0.2" button: encodin
           CSV self-test. Files prove what 1C wrote, not completeness against the database.
 compare - two runs over the same window must give the same IDs, positions and references.
 
-Exit code 1 when any ERROR finding is present.
+Exit codes: 0 - PASS; 1 - ERROR findings (FAIL); 2 - package without errors but without checked objects
+(INCOMPLETE: no posting rows or no candidate documents, so ID stability and reversibility are not shown).
 """
 
 from __future__ import annotations
@@ -432,6 +433,19 @@ def check_package(directory: Path) -> tuple[Findings, dict]:
                 findings.error("CSV_INVALID", "e02_csv_selftest.csv", exp_name, f"получено {value!r} (длина {length}), ожидалось {exp_value!r}")
         summary["selftest_cases"] = len(got)
 
+    # Without checked objects the set shows nothing about ID stability or reference reversibility.
+    not_checked = []
+    if not seen_ledger:
+        not_checked.append("нет строк проводок 62 с ledger_event_id: ID проводок, оплат и их документов не проверены")
+    if not seen_docs:
+        not_checked.append("нет документов-кандидатов: ТекущийДокумент() типизированной выборки не проверен")
+    for reason in not_checked:
+        findings.add("INCOMPLETE", "NOT_CHECKED", "e02_ids.csv", "PACKAGE", reason)
+    for kind in ("CASH", "BANK"):
+        if kind not in summary["e02_ids"]["payment_kinds"]:
+            findings.info("NOT_CHECKED", "e02_ids.csv", "PACKAGE", f"в окне нет оплат {kind}: их ID не проверены")
+    expected_result = "FAIL" if state == "FAILED" else ("INCOMPLETE" if not_checked else "PASS")
+
     log = directory / "1c_export.log"
     if log.is_file():
         text = log.read_bytes().decode("cp1251", "replace")
@@ -441,10 +455,11 @@ def check_package(directory: Path) -> tuple[Findings, dict]:
         summary["window"] = window[0] if window else None
         if not end:
             findings.info("RUN_NOT_FINISHED", "1c_export.log", "PACKAGE", "нет строки END: запуск прерван до завершения")
-        elif (end[-1] == "PASS") != (state == "WRITING"):
-            findings.error("CSV_INVALID", "1c_export.log", "PACKAGE", f"итог журнала {end[-1]} не согласован со статусом {state!r}")
+        elif end[-1] != expected_result:
+            findings.error("CSV_INVALID", "1c_export.log", "PACKAGE", f"итог журнала {end[-1]}, по статусу {state!r} и составу ожидался {expected_result}")
     else:
         findings.error("CSV_INVALID", "1c_export.log", "PACKAGE", "журнал запуска отсутствует")
+    summary["verdict"] = "FAIL" if findings.errors else ("INCOMPLETE" if not_checked else "PASS")
     summary["files_sha256"] = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(directory.iterdir()) if p.is_file()}
     return findings, summary
 
@@ -454,7 +469,9 @@ def compare_packages(first: Path, second: Path) -> tuple[Findings, dict]:
     tables = {}
     for directory in (first, second):
         local = Findings()
+        manifest = read_key_value(directory, "manifest.csv", MANIFEST_KEYS, local) or {}
         tables[directory] = {
+            "source_id": manifest.get("source_id", ""),
             "ids": read_table(directory, "e02_ids.csv", E02_IDS_HEADER, local) or [],
             "docs": read_table(directory, "e02_docs.csv", E02_DOCS_HEADER, local) or [],
             "map": read_table(directory, "id_map.csv", ID_MAP_HEADER, local) or [],
@@ -463,6 +480,9 @@ def compare_packages(first: Path, second: Path) -> tuple[Findings, dict]:
         for item in local.items:
             findings.add(item["severity"], item["code"], f"{directory.name}/{item['file']}", item["key"], item["message"])
     a, b = tables[first], tables[second]
+    # K and DOC|K are stable only within one source area (№1 §7): sets of different bases are not comparable.
+    if not a["source_id"] or a["source_id"] != b["source_id"]:
+        findings.error("COMPARE", "manifest.csv", "source_id", f"разные или пустые source_id: {a['source_id']!r} и {b['source_id']!r}")
     if a["window"][:1] != b["window"][:1]:
         findings.error("COMPARE", "1c_export.log", "PACKAGE", f"разные окна чтения {a['window'][:1]} и {b['window'][:1]}")
     summary = {}
@@ -546,6 +566,25 @@ def argument_count_mismatches(text: str, token) -> list[tuple[int, str, int, int
     return result
 
 
+def table_column_mismatches(text: str, token) -> list[tuple[int, str, str]]:
+    # A ТаблицаЗначений column read or assigned but never created by НоваяКолонка is a runtime error in 1C 7.7
+    # ("Поле агрегатного объекта не обнаружено"), not a compile error. Columns are collected per variable name
+    # across the module (a table is often filled in one routine and read in another under the same name).
+    with_literals = token.sub(lambda m: "" if m[0].startswith("//") else m[0], text)
+    tables = set(re.findall(r'(?<![.\w])(\w+)\s*=\s*СоздатьОбъект\("ТаблицаЗначений"\)', with_literals))
+    columns: dict[str, set[str]] = defaultdict(set)
+    for name, column in re.findall(r'(?<![.\w])(\w+)\.НоваяКолонка\("(\w+)"', with_literals):
+        columns[name].add(column)
+    properties = {"НомерСтроки"}
+    result = []
+    blank = token.sub(lambda m: "" if m[0].startswith("//") else '""', text)
+    for number, line in enumerate(blank.splitlines(), 1):
+        for name, attribute in re.findall(r"(?<![.\w])(\w+)\.(\w+)\b(?!\s*\()", line):
+            if name in tables and attribute not in columns[name] | properties:
+                result.append((number, name, attribute))
+    return result
+
+
 def check_static() -> tuple[Findings, dict]:
     sys.path.insert(0, str(HERE))
     import check_e01 as base  # generic narrow checks written for E0.1
@@ -576,6 +615,8 @@ def check_static() -> tuple[Findings, dict]:
             findings.error("STATIC", MODULE.name, name, f"глобальный вызов не известен синтакс-помощнику 7.7, строки {numbers[:5]}")
     for number, name, count, expected in argument_count_mismatches(text, base.TOKEN):
         findings.error("STATIC", MODULE.name, name, f"строка {number}: аргументов {count}, в определении {expected}")
+    for number, name, attribute in table_column_mismatches(text, base.TOKEN):
+        findings.error("STATIC", MODULE.name, f"{name}.{attribute}", f"строка {number}: колонка не создана НоваяКолонка")
     for number in silent_handlers(text, base.code_only):
         findings.error("STATIC", MODULE.name, f"line {number}", "Исключение без ОписаниеОшибки(): ошибка проглатывается")
     baseline = git_show("1cv77/kudir_export.txt")
@@ -613,7 +654,9 @@ def report(findings: Findings, summary: dict, json_path: str | None) -> int:
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     if json_path:
         Path(json_path).write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    return 1 if findings.errors else 0
+    if findings.errors:
+        return 1
+    return 2 if summary.get("verdict") == "INCOMPLETE" else 0
 
 
 def main(argv: list[str] | None = None) -> int:

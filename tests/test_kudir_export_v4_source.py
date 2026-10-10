@@ -122,6 +122,24 @@ class ExportV4SourceTests(unittest.TestCase):
         self.assertEqual(stages.count("Попытка"), stages.count("КУДиР4_Фатально(ОписаниеОшибки())"))
         self.assertLess(stages.index("КУДиР4_ЗакрытьКарту()"), stages.index("КУДиР4_ПроверитьОбратимость()"))
 
+    def test_empty_window_is_incomplete_not_pass(self) -> None:
+        # Без проверенных проводок и документов-кандидатов итог INCOMPLETE; export_status остаётся WRITING.
+        stages = active(body(self.src, "КУДиР4_ЭтапыЭ02"))
+        self.assertLess(stages.index("КУДиР4_ОбойтиПроводки(датанач, датакон, 1"), stages.index("гл4ЗаписейИд = гл4СтрокДанных;"))
+        self.assertLess(stages.index("КУДиР4_ОбойтиДокументы(датанач, датакон, 1"), stages.index("гл4ЗаписейДок = гл4СтрокДанных;"))
+        finish = active(body(self.src, "КУДиР4_Завершить"))
+        self.assertIn("Если гл4ЗаписейИд = 0 Тогда", finish)
+        self.assertIn("Если гл4ЗаписейДок = 0 Тогда", finish)
+        self.assertEqual(finish.count('ИтогНабора = "INCOMPLETE";'), 2)
+        self.assertLess(finish.index('ИтогНабора = "FAIL";'), finish.index('ИтогНабора = "INCOMPLETE";'))
+        reset = active(body(self.src, "КУДиР4_Сбросить"))
+        self.assertIn("гл4ЗаписейИд = 0;", reset)
+        self.assertIn("гл4ЗаписейДок = 0;", reset)
+
+    def test_table_columns_exist(self) -> None:
+        import check_e01 as base
+        self.assertEqual(chk.table_column_mismatches(self.src, base.TOKEN), [])
+
     def test_legacy_v2_button_disabled(self) -> None:
         legacy = active(body(self.src, "Сформировать"))
         self.assertNotIn("КУДиР_Выполнить", legacy)
