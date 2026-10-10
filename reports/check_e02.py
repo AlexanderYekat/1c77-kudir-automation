@@ -246,9 +246,8 @@ def parse_id(value: str) -> dict | None:
 
 # --- package -----------------------------------------------------------------------------------------
 
-def check_package(directory: Path) -> tuple[Findings, dict]:
-    findings = Findings()
-    summary: dict = {"directory": str(directory)}
+def check_run_meta(directory: Path, findings: Findings, summary: dict, label: str) -> tuple[str | None, str | None, list[str], bool]:
+    """manifest.csv, export_status.csv and the run log of a diagnostic set of stage `label` (e.g. "Э0.2")."""
     manifest = read_key_value(directory, "manifest.csv", MANIFEST_KEYS, findings)
     status = read_key_value(directory, "export_status.csv", STATUS_KEYS, findings)
     run_id = directory.name
@@ -270,23 +269,20 @@ def check_package(directory: Path) -> tuple[Findings, dict]:
         if status.get("run_id") != run_id or status.get("schema_version") != "4":
             findings.error("CSV_INVALID", "export_status.csv", "PACKAGE", "run_id/schema_version не совпадают с каталогом и v4")
         if state == "COMPLETE":
-            findings.error("CSV_INVALID", "export_status.csv", "status", "COMPLETE на Э0.2 запрещён: набор диагностический")
+            findings.error("CSV_INVALID", "export_status.csv", "status", f"COMPLETE на {label} запрещён: набор диагностический")
         elif state not in {"WRITING", "FAILED"}:
             findings.error("CSV_INVALID", "export_status.csv", "status", f"недопустимый статус {state!r}")
-
     log = directory / "1c_export.log"
     log_text = log.read_bytes().decode("cp1251", "replace") if log.is_file() else None
-    end = re.findall(r"END Э0\.2 итог=(\w+)", log_text or "")
+    end = re.findall(rf"END {re.escape(label)} итог=(\w+)", log_text or "")
     # A run that failed or never reached END is FAIL whatever its files hold. Files it did not create and id_map
     # rows of the record in progress are consequences of the stop, not separate defects; written files are checked.
     interrupted = state == "FAILED" or not end
+    return state, log_text, end, interrupted
 
-    def table(name: str, header: list[str]) -> list[dict] | None:
-        if interrupted and not (directory / name).is_file():
-            findings.info("NOT_CHECKED", name, "PACKAGE", "файл не создан: запуск прерван")
-            return None
-        return read_table(directory, name, header, findings)
 
+def check_diagnostics(directory: Path, findings: Findings, summary: dict, state: str | None) -> list[dict]:
+    """diagnostics.csv by №1 §27; exactly one designed COVERAGE_INCOMPLETE of the set; ERROR requires FAILED."""
     diagnostics = read_table(directory, "diagnostics.csv", DIAG_HEADER, findings) or []
     designed = [row for row in diagnostics if row["code"] == "COVERAGE_INCOMPLETE" and row["record_key"] == "PACKAGE"]
     reported_errors = [row for row in diagnostics if row["severity"] == "ERROR" and row not in designed]
@@ -306,8 +302,11 @@ def check_package(directory: Path) -> tuple[Findings, dict]:
         findings.error("CSV_INVALID", "export_status.csv", "status", "FAILED без ERROR в diagnostics.csv")
     for row in reported_errors[:50]:
         findings.add("REPORTED", row["code"], row["file"], row["record_key"], f"{row['field']}: {row['message']}")
+    return diagnostics
 
-    id_map = table("id_map.csv", ID_MAP_HEADER) or []
+
+def check_id_map(id_map: list[dict], findings: Findings, summary: dict) -> dict[tuple[str, str], dict]:
+    """id_map.csv by №1 §23.3: one row per (entity_type, id), ID forms, K decodes to ссылка_1С, one position per K."""
     by_key: dict[tuple[str, str], dict] = {}
     position_of_k: dict[str, str] = {}
     for row in id_map:
@@ -344,6 +343,36 @@ def check_package(directory: Path) -> tuple[Findings, dict]:
         if known != row["позиция"]:
             findings.error("ID_COLLISION", "id_map.csv", row["id"], f"один K с разными позициями {known!r} и {row['позиция']!r}")
     summary["id_map"] = dict(Counter(kind for kind, _ in by_key))
+    return by_key
+
+
+def check_selftest(selftest: list[dict] | None, name: str, findings: Findings, summary: dict) -> None:
+    if selftest is None:
+        return
+    got = [(row["case"], row["value"], row["length"]) for row in selftest]
+    expected = [(case, value, str(len(value))) for case, value in SELFTEST_CASES]
+    if len(got) != len(expected):
+        findings.error("CSV_INVALID", name, "PACKAGE", f"случаев {len(got)}, ожидалось {len(expected)}")
+    for (case, value, length), (exp_name, exp_value, exp_length) in zip(got, expected):
+        if case != exp_name or value != exp_value or length != exp_length:
+            findings.error("CSV_INVALID", name, exp_name, f"получено {value!r} (длина {length}), ожидалось {exp_value!r}")
+    summary["selftest_cases"] = len(got)
+
+
+def check_package(directory: Path) -> tuple[Findings, dict]:
+    findings = Findings()
+    summary: dict = {"directory": str(directory)}
+    state, log_text, end, interrupted = check_run_meta(directory, findings, summary, "Э0.2")
+
+    def table(name: str, header: list[str]) -> list[dict] | None:
+        if interrupted and not (directory / name).is_file():
+            findings.info("NOT_CHECKED", name, "PACKAGE", "файл не создан: запуск прерван")
+            return None
+        return read_table(directory, name, header, findings)
+
+    check_diagnostics(directory, findings, summary, state)
+    id_map = table("id_map.csv", ID_MAP_HEADER) or []
+    by_key = check_id_map(id_map, findings, summary)
 
     ids = table("e02_ids.csv", E02_IDS_HEADER) or []
     seen_ledger: set[str] = set()
@@ -439,16 +468,7 @@ def check_package(directory: Path) -> tuple[Findings, dict]:
         "trailing_space_counts": dict(Counter(len(p) - len(p.rstrip(" ")) for p in positions)),
     }
 
-    selftest = table("e02_csv_selftest.csv", SELFTEST_HEADER)
-    if selftest is not None:
-        got = [(row["case"], row["value"], row["length"]) for row in selftest]
-        expected = [(name, value, str(len(value))) for name, value in SELFTEST_CASES]
-        if len(got) != len(expected):
-            findings.error("CSV_INVALID", "e02_csv_selftest.csv", "PACKAGE", f"случаев {len(got)}, ожидалось {len(expected)}")
-        for (name, value, length), (exp_name, exp_value, exp_length) in zip(got, expected):
-            if name != exp_name or value != exp_value or length != exp_length:
-                findings.error("CSV_INVALID", "e02_csv_selftest.csv", exp_name, f"получено {value!r} (длина {length}), ожидалось {exp_value!r}")
-        summary["selftest_cases"] = len(got)
+    check_selftest(table("e02_csv_selftest.csv", SELFTEST_HEADER), "e02_csv_selftest.csv", findings, summary)
 
     # Without checked objects the set shows nothing about ID stability or reference reversibility.
     not_checked = []
@@ -600,7 +620,7 @@ def table_column_mismatches(text: str, token) -> list[tuple[int, str, str]]:
     return result
 
 
-def check_static() -> tuple[Findings, dict]:
+def check_static(form_action: str = FORM_ACTION) -> tuple[Findings, dict]:
     sys.path.insert(0, str(HERE))
     import check_e01 as base  # generic narrow checks written for E0.1
 
@@ -655,8 +675,8 @@ def check_static() -> tuple[Findings, dict]:
             findings.error("STATIC", ERT.name, "PACKAGE", f"модуль ERT отличается от TXT, строки {ert['different_lines'][:10]}")
         actions = [c["formula"] for c in ert["dialog_controls"] if c["class"] == "BUTTON"]
         summary["ert_buttons"] = [(c["caption"], c["formula"]) for c in ert["dialog_controls"] if c["class"] == "BUTTON"]
-        if FORM_ACTION not in actions:
-            findings.error("STATIC", ERT.name, "PACKAGE", f"в диалоге нет кнопки с формулой {FORM_ACTION}")
+        if form_action not in actions:
+            findings.error("STATIC", ERT.name, "PACKAGE", f"в диалоге нет кнопки с формулой {form_action}")
         if "Сформировать()" in actions:
             findings.error("STATIC", ERT.name, "PACKAGE", "в диалоге осталась кнопка отключённой выгрузки v2")
         if ert["undeclared_form_identifiers"]:

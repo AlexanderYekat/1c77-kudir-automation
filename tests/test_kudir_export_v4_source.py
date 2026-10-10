@@ -1,4 +1,5 @@
-"""Э0.2: инварианты исходника блока КУДиР4_ в 1cv77/kudir_export.txt (ТЗ №1 §§5-7, 23, 27, 30; ТЗ №4 §§5, 8, 13).
+"""Э0.2-Э0.3: инварианты исходника блока КУДиР4_ в 1cv77/kudir_export.txt (ТЗ №1 §§5-12.1, 18, 21-23, 27, 30;
+ТЗ №4 §§4-5, 7-8, 13).
 
 1С 7.7 в CI нет: проверяется текст модуля. Компиляцию и запуск выполняет владелец в 1С.
 """
@@ -15,6 +16,7 @@ EXPORT = ROOT / "1cv77" / "kudir_export.txt"
 sys.path.insert(0, str(ROOT / "reports"))
 
 import check_e02 as chk  # noqa: E402
+import check_e03 as chk3  # noqa: E402
 
 
 def body(src: str, name: str) -> str:
@@ -42,8 +44,7 @@ class ExportV4SourceTests(unittest.TestCase):
     def test_headers_match_contract_and_checker(self) -> None:
         self.assertEqual(returned_literal(self.src, "КУДиР4_ЗаголовокКарты").split(";"), chk.ID_MAP_HEADER)
         self.assertEqual(returned_literal(self.src, "КУДиР4_ЗаголовокДиаг").split(";"), chk.DIAG_HEADER)
-        self.assertEqual(returned_literal(self.src, "КУДиР4_ЗаголовокИд").split(";"), chk.E02_IDS_HEADER)
-        self.assertEqual(returned_literal(self.src, "КУДиР4_ЗаголовокДок").split(";"), chk.E02_DOCS_HEADER)
+        self.assertEqual(returned_literal(self.src, "КУДиР4_ЗаголовокДвижений").split(";"), chk3.LEDGER_HEADER)
         self.assertEqual(returned_literal(self.src, "КУДиР4_ЗаголовокСамопроверки").split(";"), chk.SELFTEST_HEADER)
 
     def test_manifest_keys_in_contract_order(self) -> None:
@@ -69,12 +70,11 @@ class ExportV4SourceTests(unittest.TestCase):
             self.assertRegex(active(body(self.src, name)), r"CreateTextFile\([^)]*, 0, 0\)")
 
     def test_k_from_current_document_only(self) -> None:
-        walk = active(body(self.src, "КУДиР4_ОбойтиПроводки"))
-        self.assertIn("ДокОбъект.НайтиДокумент(Опер.Документ)", walk)
-        self.assertIn("Ссылка = ДокОбъект.ТекущийДокумент();", walk)
+        posting = active(body(self.src, "КУДиР4_ПрочитатьПроводку"))
+        self.assertIn("ДокОбъект.НайтиДокумент(Опер.Документ)", posting)
+        self.assertIn("гл4ПрСсылка = ДокОбъект.ТекущийДокумент();", posting)
+        self.assertIn("гл4ПрСист = ЗначениеВСтрокуВнутр(гл4ПрСсылка);", posting)
         self.assertNotIn("ЗначениеВСтрокуВнутр(Опер", self.v4)
-        kind = active(body(self.src, "КУДиР4_ОбойтиВид"))
-        self.assertIn("Ссылка = Выборка.ТекущийДокумент();", kind)
         self.assertNotIn("ЗначениеВСтрокуВнутр(Выборка", self.v4)
         self.assertNotIn("Выборка.ПолучитьПозицию", self.v4)
 
@@ -91,9 +91,11 @@ class ExportV4SourceTests(unittest.TestCase):
         pay = active(body(self.src, "КУДиР4_ИдОплаты"))
         self.assertIn('"CASH|" + Ключ', pay)
         self.assertIn('ВидОпл + "|" + Ключ + "|" + НомПров', pay)
-        side = active(body(self.src, "КУДиР4_СторонаПроводки"))
-        self.assertIn('"LED|" + Ключ + "|" + НомПров + "|" + НомерСтороны', side)
-        self.assertIn('"DOC|" + Ключ', side)
+        side = active(body(self.src, "КУДиР4_СторонаДвижения"))
+        self.assertIn('"LED|" + гл4ПрКлюч + "|" + гл4ПрНомПров + "|" + СокрЛП(КУДиР4_СледНомерСтороны(гл4ПрКлюч, гл4ПрНомПров))', side)
+        self.assertIn('"DOC|" + гл4ПрКлюч', side)
+        self.assertIn('КУДиР4_ИдОплаты("CASH", гл4ПрКлюч, "")', side)
+        self.assertIn("КУДиР4_ИдОплаты(гл4ПрВидОпл, гл4ПрКлюч, гл4ПрНомПров)", side)
 
     def test_collisions_are_errors_not_first_wins(self) -> None:
         remember = active(body(self.src, "КУДиР4_ЗапомнитьИд"))
@@ -118,23 +120,21 @@ class ExportV4SourceTests(unittest.TestCase):
         self.assertLess(finish.index("КУДиР4_ЗакрытьДанные()"), finish.index("КУДиР4_ЗакрытьДиаг()"))
         self.assertLess(finish.index("КУДиР4_ЗакрытьДиаг()"), finish.index('КУДиР4_ЗаписатьСтатус("FAILED")'))
         self.assertIn("КУДиР4_ЗакрытьОстаток()", active(body(self.src, "КУДиР4_Сбросить")))
-        stages = active(body(self.src, "КУДиР4_ЭтапыЭ02"))
+        stages = active(body(self.src, "КУДиР4_ЭтапыЭ03"))
         self.assertEqual(stages.count("Попытка"), stages.count("КУДиР4_Фатально(ОписаниеОшибки())"))
         self.assertLess(stages.index("КУДиР4_ЗакрытьКарту()"), stages.index("КУДиР4_ПроверитьОбратимость()"))
+        self.assertLess(stages.index("КУДиР4_ОбойтиПроводки(датанач, датакон, 1"), stages.index("КУДиР4_ОбойтиПроводки(датанач, датакон, 2"))
 
     def test_empty_window_is_incomplete_not_pass(self) -> None:
-        # Без проверенных проводок и документов-кандидатов итог INCOMPLETE; export_status остаётся WRITING.
-        stages = active(body(self.src, "КУДиР4_ЭтапыЭ02"))
-        self.assertLess(stages.index("КУДиР4_ОбойтиПроводки(датанач, датакон, 1"), stages.index("гл4ЗаписейИд = гл4СтрокДанных;"))
-        self.assertLess(stages.index("КУДиР4_ОбойтиДокументы(датанач, датакон, 1"), stages.index("гл4ЗаписейДок = гл4СтрокДанных;"))
+        # Без строк ledger62 итог INCOMPLETE; export_status остаётся WRITING. Число строк учитывается и при сбое
+        # этапа (замечание журнала КП0.2: «итог: 0» при частично записанном файле).
+        stages = active(body(self.src, "КУДиР4_ЭтапыЭ03"))
+        self.assertLess(stages.index("КонецПопытки;"), stages.index("гл4ЗаписейДвижений = гл4СтрокДанных;"))
         finish = active(body(self.src, "КУДиР4_Завершить"))
-        self.assertIn("Если гл4ЗаписейИд = 0 Тогда", finish)
-        self.assertIn("Если гл4ЗаписейДок = 0 Тогда", finish)
-        self.assertEqual(finish.count('ИтогНабора = "INCOMPLETE";'), 2)
+        self.assertIn("Если гл4ЗаписейДвижений = 0 Тогда", finish)
+        self.assertEqual(finish.count('ИтогНабора = "INCOMPLETE";'), 1)
         self.assertLess(finish.index('ИтогНабора = "FAIL";'), finish.index('ИтогНабора = "INCOMPLETE";'))
-        reset = active(body(self.src, "КУДиР4_Сбросить"))
-        self.assertIn("гл4ЗаписейИд = 0;", reset)
-        self.assertIn("гл4ЗаписейДок = 0;", reset)
+        self.assertIn("гл4ЗаписейДвижений = 0;", active(body(self.src, "КУДиР4_Сбросить")))
 
     def test_v4_does_not_query_metadata(self) -> None:
         # Запуск KUDIR4_20261010_001: Метаданные.Документ() без параметра вернул количество, Получить() у числа
@@ -146,8 +146,6 @@ class ExportV4SourceTests(unittest.TestCase):
         comment = active(body(self.src, "КУДиР4_КомментарийДок"))
         self.assertIn('Возврат "" + Ссылка.Комментарий;', comment)
         self.assertNotIn("Попытка", comment)
-        kind = active(body(self.src, "КУДиР4_ОбойтиВид"))
-        self.assertLess(kind.index("Попытка"), kind.index('СоздатьОбъект("Документ." + ИмяВида)'))
 
     def test_table_columns_exist(self) -> None:
         import check_e01 as base
@@ -156,7 +154,82 @@ class ExportV4SourceTests(unittest.TestCase):
     def test_legacy_v2_button_disabled(self) -> None:
         legacy = active(body(self.src, "Сформировать"))
         self.assertNotIn("КУДиР_Выполнить", legacy)
-        self.assertIn("КУДиР4_НаборЭ02(выбДатаНач, выбДатаКонец)", active(body(self.src, "ВыгрузкаЭ02")))
+        self.assertIn("КУДиР4_НаборЭ03(выбДатаНач, выбДатаКонец)", active(body(self.src, "ВыгрузкаЭ03")))
+        self.assertIn("«Набор Э0.3»", legacy)
+
+
+class ExportLedgerSourceTests(unittest.TestCase):
+    """Э0.3: ledger62.csv по №1 §§6-12.1, 18 в исходнике КУДиР4_."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.src = EXPORT.read_text(encoding="utf-8-sig")
+        cls.v4 = active(cls.src[cls.src.index("Функция КУДиР_СтрокиРавны("):])
+        cls.side = active(body(cls.src, "КУДиР4_СторонаДвижения"))
+        cls.role = active(body(cls.src, "КУДиР4_РольДвижения"))
+
+    def test_version_line_matches_start_line(self) -> None:
+        version = re.match(r"// version: (\S+) ", self.src)[1]
+        self.assertIn(f'"START Э0.3 version={version} run_id="', active(body(self.src, "КУДиР4_НачатьЗапуск")))
+
+    def test_row_has_all_contract_fields_in_order(self) -> None:
+        # 37 значений СписокЗначений в порядке заголовка №1 §12; последние - поля оплаты.
+        values = re.findall(r"сп\.ДобавитьЗначение\((.*)\);", self.side)
+        self.assertEqual(len(values), len(chk3.LEDGER_HEADER))
+        self.assertEqual(values[:3], ["ИдСтроки", "ИдДок", "ИдОпл"])
+        self.assertEqual(values[5], '""')  # НомерСтрокиВДокументе пусто (№1 §6)
+        self.assertEqual(values[10], '"" + гл4ПрКоп')
+        self.assertEqual(values[23:28], ["гл4ПрСодПров", "гл4ПрСод", "гл4ПрПредст", "гл4ПрКоммент", "гл4ПрПерв"])
+        self.assertEqual(values[28:], ["Роль", "ВидОплПоле", "Гран", "ОплВид", "ОплНомер", "ОплДата", "Назн", "ИстНазн", "ОплКоммент"])
+
+    def test_role_rules_order_and_values(self) -> None:
+        # Отрицательная сумма проверяется первой и даёт UNKNOWN; REVERSAL автоматически не назначается.
+        self.assertLess(self.role.index("Если Коп < 0 Тогда"), self.role.index("Если Денежная = 0 Тогда"))
+        self.assertLess(self.role.index("Если Денежная = 0 Тогда"), self.role.index("Если СтрДлина(ВидОпл) = 0 Тогда"))
+        self.assertEqual(set(re.findall(r'Возврат "(\w+)";', self.role)), {"UNKNOWN", "NONCASH", "CASH_IN", "CASH_OUT"})
+        self.assertNotIn("REVERSAL", self.v4)
+        self.assertIn('В = Врег("РасходныйОрдер")', self.role)
+        self.assertIn('В = Врег("ПриходныйОрдер")', self.role)
+
+    def test_payment_id_only_for_money_roles(self) -> None:
+        guard = self.side.index('Если (Роль = "CASH_IN") Или (Роль = "CASH_OUT") Тогда')
+        self.assertLess(self.side.index("Роль = КУДиР4_РольДвижения("), guard)
+        self.assertLess(guard, self.side.index('ИдОпл = КУДиР4_ИдОплаты("CASH"'))
+        self.assertEqual(self.side.count("ИдОпл = КУДиР4_ИдОплаты("), 2)
+        self.assertIn('"MOVEMENT_ROLE_UNKNOWN"', self.side)
+        self.assertIn('"PAYMENT_MEMBERSHIP_UNKNOWN"', self.side)
+        self.assertIn('"PAYMENT_MEMBERSHIP_UNKNOWN"', active(body(self.src, "КУДиР4_ЗавершитьДокумент")))
+
+    def test_texts_and_positions_are_not_trimmed(self) -> None:
+        for trimmed in ("СокрЛП(гл4ПрСод", "СокрЛП(гл4ПрПредст", "СокрЛП(гл4ПрПерв", "СокрЛП(гл4ПрКоммент", "СокрЛП(гл4ПрПоз", "СокрЛП(гл4ПрСист", "СокрЛП(Опер.Содерж", "СокрЛП(Опер.Первич"):
+            self.assertNotIn(trimmed, self.v4)
+        text = active(body(self.src, "КУДиР4_ТекстПроводки"))
+        for source in ('"" + Опер.СодержаниеПроводки', '"" + Опер.Содержание', '"" + Опер.ПредставлениеПроводки()', '"" + Опер.ПервичныйДокумент'):
+            self.assertIn(source, text)
+
+    def test_primary_stub_not_connected_and_not_from_statement(self) -> None:
+        stub = active(body(self.src, "КУДиР4_ПервичкаБанка"))
+        self.assertIn('Рез.ДобавитьЗначение("NOT_CONNECTED");', stub)
+        bank = active(body(self.src, "КУДиР4_РеквизитыБанка"))
+        self.assertIn('КодДиаг = "PRIMARY_" + СостПерв;', bank)
+        self.assertNotIn("гл4ПрНомДок", bank)
+        self.assertNotIn("гл4ПрДатаДок", bank)
+        self.assertIn("ОплНомер = гл4ПервНомер;", self.side)
+
+    def test_amount_signed_kopecks_once_per_posting(self) -> None:
+        self.assertIn("гл4ПрКоп = КУДиР_Копейки(Опер.Сумма);", active(body(self.src, "КУДиР4_ПрочитатьПроводку")))
+        self.assertNotIn("Опер.Сумма", self.side)
+        self.assertNotRegex(self.v4, r"\bМакс\(|\bМин\(")
+
+    def test_out_of_scope_account_is_error(self) -> None:
+        self.assertIn('(Счет62 <> "62.1") И (Счет62 <> "62.2")', self.side)
+        self.assertIn('"COVERAGE_INCOMPLETE", "движение на счёте "', self.side)
+
+    def test_full_walk_debit_side_first(self) -> None:
+        walk = active(body(self.src, "КУДиР4_ОбойтиПроводки"))
+        self.assertIn("Опер.ВыбратьОперацииСПроводками(датанач, датакон);", walk)
+        self.assertLess(walk.index('КУДиР4_СторонаДвижения(Опер, "D"'), walk.index('КУДиР4_СторонаДвижения(Опер, "K"'))
+        self.assertLess(walk.index("КонецЦикла;"), walk.index("КУДиР4_ЗавершитьДокумент();"))
 
 
 if __name__ == "__main__":
