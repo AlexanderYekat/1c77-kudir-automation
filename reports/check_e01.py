@@ -264,7 +264,11 @@ def main():
     source = read(target)
     original = read(ROOT / "1cv77" / "kudir_export.txt")
     definitions, duplicates, forward = routines(source)
-    baseline, _, baseline_forward = routines(original)
+    current, _, current_forward = routines(original)
+    # The agent is a copy of kudir_export as accepted at E0.1 (commit ae02186); later export stages
+    # (E0.2+) change that module, so the "legacy routines unchanged" check uses the E0.1 version.
+    accepted = subprocess.run(["git", "show", "ae02186:1cv77/kudir_export.txt"], cwd=ROOT, capture_output=True)
+    baseline = routines(accepted.stdout.decode("utf-8-sig"))[0] if accepted.returncode == 0 else current
     helper = syntax_helper_names()
     calls = set(re.findall(r"\b(КУДиР_\w+)\s*\(", code_only(source), re.I))
     reached = set()
@@ -282,7 +286,7 @@ def main():
         "source_version": source.splitlines()[0],
         "routines": len(definitions),
         "added_routines": sorted(set(definitions) - set(baseline)),
-        "changed_existing_routines_ignoring_comments": [name for name in baseline if canonical(baseline[name]["text"]) != canonical(definitions[name]["text"])],
+        "changed_existing_routines_ignoring_comments": [name for name in baseline if name not in definitions or canonical(baseline[name]["text"]) != canonical(definitions[name]["text"])],
         "duplicate_routines": duplicates,
         "unresolved_local_helpers": sorted(calls - definitions.keys()),
         "forward_declarations_without_body": sorted(forward - definitions.keys()),
@@ -296,7 +300,7 @@ def main():
             "source_version": original.splitlines()[0],
             "builtin_name_clashes": builtin_name_clashes(original),
             "unknown_global_calls": unknown_global_calls(original, helper) if helper is not None else None,
-            "calls_before_definition_without_forward": calls_before_definition(original, baseline, baseline_forward),
+            "calls_before_definition_without_forward": calls_before_definition(original, current, current_forward),
             "forward_signature_mismatch": forward_mismatches(original),
         },
         "diagnostic_reachable_routines": sorted(reached),

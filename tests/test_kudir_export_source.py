@@ -145,12 +145,15 @@ class ExportSourceTests(unittest.TestCase):
         self.assertIn("КоличествоПроводок", self.src)
 
     def test_no_silent_try_except(self) -> None:
-        code = "\n".join(
-            line for line in self.src.splitlines() if not line.lstrip().startswith("//")
-        )
-        self.assertNotIn("Попытка", code)
-        self.assertNotIn("Исключение", code)
-        self.assertNotIn("КонецПопытки", code)
+        # ТЗ №4 §5 требует обрабатывать ошибки потоков (Попытка допустима с Э0.2),
+        # но каждый обработчик сообщает причину: пустого/немого Исключение нет.
+        lines = [line for line in self.src.splitlines() if not line.lstrip().startswith("//")]
+        handlers = [i for i, line in enumerate(lines) if line.strip() == "Исключение"]
+        self.assertTrue(handlers)
+        self.assertEqual(len(handlers), sum(1 for line in lines if line.strip() == "Попытка"))
+        for start in handlers:
+            end = next(i for i in range(start, len(lines)) if lines[i].strip() == "КонецПопытки;")
+            self.assertIn("ОписаниеОшибки()", "\n".join(lines[start:end]), f"немой обработчик после строки {start}")
         amount = _code_body(self.src, "КУДиР_СуммаДокументаКоп")
         self.assertNotIn('Возврат "0"', amount)
         self.assertNotIn("Исключение", amount)

@@ -121,7 +121,9 @@ class Stage60ExportContractTests(unittest.TestCase):
         active = _active(self.src)
         self.assertNotIn("ПогаситьДолгиFIFO", active)
         self.assertNotIn("глМаксОплат", active)
-        self.assertNotIn("Попытка", active)
+        # Попытка в прежнем коде schema v2 по-прежнему не используется; обработка ошибок v4 - блок КУДиР4_.
+        self.assertNotIn("Попытка", _active(_code_body(self.src, "КУДиР_ДобавитьДокумент")))
+        self.assertNotIn("Попытка", _active(_code_body(self.src, "КУДиР_СуммаДокументаКоп")))
         self.assertNotIn("document_lines.csv", active)
         collect = _active(_code_body(self.src, "КУДиР_СобратьДокументы"))
         self.assertNotIn("за НДС", collect.lower())

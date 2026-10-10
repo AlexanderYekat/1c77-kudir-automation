@@ -46,7 +46,7 @@ class LoaderSourceTests(unittest.TestCase):
         cls.proto_load = _function_body(cls.proto, "КУДиР_ЗагрузитьИВосстановить")
 
     def test_loader_is_not_the_proto(self) -> None:
-        self.assertIn("этап6", self.src.splitlines()[0])
+        self.assertRegex(self.src.splitlines()[0], r"^﻿?// version: \d{4}\.\d{2}\.\d{2}-\d{2} ")
         self.assertIn("run_kudir.bat", self.src)
         self.assertNotIn("run_kudir_proto.bat", self.src)
         self.assertIn("ДокОпл.НомерДок", self.proto_load)
