@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -208,12 +209,20 @@ class TimeoutDeadlineTests(unittest.TestCase):
             documents=[],
             openings=[],
         )
-        engine = Engine(bundle=bundle, cfg=cfg, log=AnalysisLog())
-        first = engine._timeout_deadline("C1")
-        second = engine._timeout_deadline("C1")
-        other = engine._timeout_deadline("C2")
-        self.assertEqual(first, second)
-        self.assertNotEqual(first, other)
+        timeout = float(cfg.s("timeout_seconds_per_counterparty"))
+        # Two independent reads may return the same clock tick.
+        for ticks in ((1000.0, 1000.0), (1000.0, 1001.0)):
+            with self.subTest(ticks=ticks):
+                engine = Engine(bundle=bundle, cfg=cfg, log=AnalysisLog())
+                with patch("kudir.matcher.time.monotonic", side_effect=ticks) as clock:
+                    first = engine._timeout_deadline("C1")
+                    self.assertEqual(engine._timeout_deadline("C1"), first)
+                    other = engine._timeout_deadline("C2")
+                    self.assertEqual(engine._timeout_deadline("C2"), other)
+                    self.assertEqual(clock.call_count, 2)
+                self.assertEqual(first, ticks[0] + timeout)
+                self.assertEqual(other, ticks[1] + timeout)
+                self.assertEqual(engine._cp_deadline, {"C1": first, "C2": other})
 
 
 if __name__ == "__main__":

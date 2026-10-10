@@ -27,6 +27,8 @@ $RECYCLE.BIN/
 # Журналы и служебные каталоги 1С 7.7
 SYSLOG/
 *.log
+# Эталоны тестов — не журналы: test_golden_schema читает expected_analysis.log.
+!tests/golden/**/*.log
 1Cv7.DD
 1Cv7.spl
 
@@ -37,9 +39,15 @@ __pycache__/
 venv/
 .env
 .env.*
+.pytest_cache/
+
+# Протоколы reports/check_e01.py (сам скрипт в репозитории)
+reports/*-checks.json
+reports/*-tests.txt
 
 # Каталог обмена прототипа (пишет 1С, читает Python)
 exchange/
 
+# Локальные примеры карточек счетов владельца
 пример1.csv
 Пример2.csv
