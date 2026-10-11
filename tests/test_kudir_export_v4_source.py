@@ -217,14 +217,48 @@ class ExportLedgerSourceTests(unittest.TestCase):
         for source in ('"" + Опер.СодержаниеПроводки', '"" + Опер.Содержание', '"" + Опер.ПредставлениеПроводки()', '"" + Опер.ПервичныйДокумент'):
             self.assertIn(source, text)
 
-    def test_primary_stub_not_connected_and_not_from_statement(self) -> None:
-        stub = active(body(self.src, "КУДиР4_ПервичкаБанка"))
-        self.assertIn('Рез.ДобавитьЗначение("NOT_CONNECTED");', stub)
+    def test_primary_from_statement_row_not_from_statement(self) -> None:
+        # №1 §18, BANKDIAG_20261011_001: первичка - ссылка ПервичныйДокумент строки выписки (НомерДок/ДатаДок
+        # самого документа-платёжки) или список РеквизитыПлатДокументов; номер и дата выписки не подставляются.
+        func = active(body(self.src, "КУДиР4_ПервичкаБанка"))
+        self.assertNotIn("NOT_CONNECTED", func)
+        self.assertIn("КУДиР4_ПервичкаВыписки(Ссылка, Ключ, Поз);", func)
+        self.assertIn("Сост = КУДиР4_ПервичкаПроводки(НомПров, Номер, ДатаПерв, Причина);", func)
+        row = active(body(self.src, "КУДиР4_ПервичкаСтроки"))
+        self.assertIn('Перв = ТабВып.ПолучитьЗначение(н, "ПервичныйДокумент");', row)
+        self.assertIn("Номер = СокрЛП(Перв.НомерДок);", row)
+        self.assertIn("ДатаПерв = Перв.ДатаДок;", row)
+        self.assertIn("Если Перв = Ссылка Тогда", row)
+        primary = "".join(active(body(self.src, name)) for name in (
+            "КУДиР4_ПервичкаБанка", "КУДиР4_ПервичкаВыписки", "КУДиР4_ПервичкаСтроки", "КУДиР4_ПервичкаПроводки"))
+        for statement in ("Ссылка.НомерДок", "Ссылка.ДатаДок", "ДокВып.НомерДок", "ДокВып.ДатаДок", "гл4ПрНомДок", "гл4ПрДатаДок"):
+            self.assertNotIn(statement, primary)
         bank = active(body(self.src, "КУДиР4_РеквизитыБанка"))
         self.assertIn('КодДиаг = "PRIMARY_" + СостПерв;', bank)
         self.assertNotIn("гл4ПрНомДок", bank)
         self.assertNotIn("гл4ПрДатаДок", bank)
         self.assertIn("ОплНомер = гл4ПервНомер;", self.side)
+
+    def test_primary_pairing_in_row_order_with_text_check(self) -> None:
+        # Проводки идут в порядке строк: следующая свободная строка с тем же ключом и текстом; без строки или при
+        # пропущенной строке с ключом сопоставленной - AMBIGUOUS на всю выписку, позиция другой версии - ERROR.
+        pair = active(body(self.src, "КУДиР4_ПервичкаВыписки"))
+        self.assertIn("ст = Указ;", pair)
+        self.assertIn("КУДиР_СтрокиРавны(Лев(ТекстСтр, СтрДлина(ТекстПров)), ТекстПров) = 1", pair)
+        self.assertIn("Если КУДиР_СтрокиРавны(ПозСейчас, Поз) = 0 Тогда", pair)
+        self.assertEqual(pair.count('гл4ПервВыпСост = "AMBIGUOUS";'), 2)
+        self.assertLess(pair.index('гл4ПервВыпСост = "ERROR";'), pair.index("ДокВып.ВыгрузитьТабличнуюЧасть(ТабВып);"))
+        self.assertTrue(pair.rstrip().endswith('гл4ПервВыпСост = "";\n\tгл4ПервВыпПричина = "";'))
+        key = active(body(self.src, "КУДиР4_ПервичкаКлючПроводки"))
+        self.assertIn("КУДиР_ЭтоДенежныйСчет(Опер.Дебет.Счет) = 1", key)
+        self.assertIn("КУДиР_ЭтоДенежныйСчет(Опер.Кредит.Счет) = 1", key)
+
+    def test_primary_partial_with_both_fields_is_diagnosed(self) -> None:
+        # Обрезанный список платёжек - PARTIAL с номером и датой: диагностика по номеру всё равно пишется (№1 §18).
+        bank = active(body(self.src, "КУДиР4_РеквизитыБанка"))
+        guard = bank.index('Если (СостПерв = "PARTIAL") И (СтрДлина(Номер) > 0) И (СтрДлина(ДатаСтр) > 0) Тогда')
+        self.assertLess(bank.index('КодДиаг = "PRIMARY_" + СостПерв;'), guard)
+        self.assertIn('КУДиР4_Предупреждение("ledger62.csv", ИдОпл, "НомерДокументаОплаты", КодДиаг, Причина);', bank[guard:])
 
     def test_amount_signed_kopecks_once_per_posting(self) -> None:
         self.assertIn("гл4ПрКоп = КУДиР_Копейки(Опер.Сумма);", active(body(self.src, "КУДиР4_ПрочитатьПроводку")))

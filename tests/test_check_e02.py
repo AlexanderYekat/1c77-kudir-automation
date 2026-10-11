@@ -317,6 +317,18 @@ class StaticRulesTests(unittest.TestCase):
                 'т.ИмяСлучая = "a";\nт.ИмяСлучаяСлучая = "b";\nт.НомерСтроки = 1;\nА = "т.Нет";\n')
         self.assertEqual(chk.table_column_mismatches(text, self.base.TOKEN), [(5, "т", "ИмяСлучаяСлучая")])
 
+    def test_method_called_with_too_many_arguments(self) -> None:
+        # Запуск KUDIR4_20261011_001: Опер.ПолучитьПроводку(н) - «Слишком много параметров» во время выполнения.
+        text = ('Опер.ВыбратьПроводки();\nПока Опер.ПолучитьПроводку() = 1 Цикл\nКонецЦикла;\nОпер.ПолучитьПроводку(н);\n'
+                'А = "Опер.ПолучитьПроводку(1)"; // Опер.ПолучитьПроводку(2)\nПолучитьПроводку(3);\nт.ПолучитьЗначение(1, "a,b");\n')
+        limits = {"получитьпроводку": 0, "получитьзначение": 2}
+        self.assertEqual(chk.method_calls_over_limit(text, self.base.TOKEN, limits), [(4, "ПолучитьПроводку", 1, 0)])
+        helper = chk.method_parameter_limits(self.base.SYNTAX_HELPER)
+        if helper is None:
+            self.skipTest("синтакс-помощник 1С 7.7 не установлен")
+        self.assertEqual([helper[name] for name in ("получитьпроводку", "выбратьпроводки", "номерпроводки")], [0, 0, 0])
+        self.assertEqual([helper[name] for name in ("найтиоперацию", "получитьзначение")], [1, 2])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -142,7 +142,8 @@ class ExportSourceTests(unittest.TestCase):
         self.assertIn("КУДиР_ВидРасчетовИзПроводок62", add_doc)
         self.assertIn("проведённой реализации", add_doc)
         self.assertIn("НайтиОперацию", self.src)
-        self.assertIn("КоличествоПроводок", self.src)
+        # Проводки операции - выборкой ВыбратьПроводки()/ПолучитьПроводку(); ПолучитьПроводку(н) - ошибка выполнения.
+        self.assertIn("ВыбратьПроводки()", _code_body(self.src, "КУДиР_ВидРасчетовИзПроводок62"))
 
     def test_no_silent_try_except(self) -> None:
         # ТЗ №4 §5 требует обрабатывать ошибки потоков (Попытка допустима с Э0.2),

@@ -604,6 +604,48 @@ def argument_count_mismatches(text: str, token) -> list[tuple[int, str, int, int
     return result
 
 
+def method_parameter_limits(helper_path: Path) -> dict[str, int] | None:
+    # Largest parameter count of every Russian method name (lower case) over all its signatures in the 1C 7.7 syntax
+    # helper. All item kinds count, including "A" - accounting objects such as Операция: ПолучитьПроводку() returns
+    # the next posting of ВыбратьПроводки(), and a number passed to it fails only at run time ("Слишком много
+    # параметров передано при вызове функции/процедуры объекта", run KUDIR4_20261011_001).
+    if not helper_path.is_file():
+        return None
+    text = helper_path.read_bytes().decode("cp1251", "replace")
+    limits: dict[str, int] = {}
+    item = r'\{"Item","[^"]*","([^"]*)","[^"]*",\s*"([^"]*)",\s*"[^"]*"(?:,\s*"@Синтаксис:\s*([^@"]*))?'
+    for name, template, syntax in re.findall(item, text):
+        name = name.strip().lower()
+        for signature in (template, syntax):
+            inner = re.search(r"\((.*)\)", signature)
+            if inner and re.fullmatch(r"\w+", name):
+                limits[name] = max(limits.get(name, 0), len(inner[1].split(",")) if inner[1].strip() else 0)
+    return limits
+
+
+def method_calls_over_limit(text: str, token, limits: dict[str, int]) -> list[tuple[int, str, int, int]]:
+    # Object method calls ".Имя(...)" with more arguments than any signature of Имя in the syntax helper.
+    # String literals are kept as "" so commas inside them do not count; calls split across lines are skipped.
+    code = token.sub(lambda m: "" if m[0].startswith("//") else '""', text)
+    result = []
+    for number, line in enumerate(code.splitlines(), 1):
+        for match in re.finditer(r"\.(\w+)\s*\(", line):
+            limit = limits.get(match[1].lower())
+            if limit is None:
+                continue
+            index, depth, commas = match.end(), 1, 0
+            while index < len(line) and depth:
+                depth += {"(": 1, ")": -1}.get(line[index], 0)
+                commas += line[index] == "," and depth == 1
+                index += 1
+            if depth:
+                continue
+            count = commas + 1 if line[match.end():index - 1].strip() else 0
+            if count > limit:
+                result.append((number, match[1], count, limit))
+    return result
+
+
 def table_column_mismatches(text: str, token) -> list[tuple[int, str, str]]:
     # A ТаблицаЗначений column read or assigned but never created by НоваяКолонка is a runtime error in 1C 7.7
     # ("Поле агрегатного объекта не обнаружено"), not a compile error. Columns are collected per variable name
@@ -663,6 +705,8 @@ def check_static(form_action: str = FORM_ACTION) -> tuple[Findings, dict]:
             findings.error("STATIC", MODULE.name, name, f"глобальный вызов не известен синтакс-помощнику 7.7, строки {numbers[:5]}")
     for number, name, count, expected in argument_count_mismatches(text, base.TOKEN):
         findings.error("STATIC", MODULE.name, name, f"строка {number}: аргументов {count}, в определении {expected}")
+    for number, name, count, limit in method_calls_over_limit(text, base.TOKEN, method_parameter_limits(base.SYNTAX_HELPER) or {}):
+        findings.error("STATIC", MODULE.name, name, f"строка {number}: у метода {name} аргументов {count}, в синтакс-помощнике не больше {limit}")
     for number, name, attribute in table_column_mismatches(text, base.TOKEN):
         findings.error("STATIC", MODULE.name, f"{name}.{attribute}", f"строка {number}: колонка не создана НоваяКолонка")
     for number in silent_handlers(text, base.code_only):
