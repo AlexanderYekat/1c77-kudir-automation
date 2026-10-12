@@ -1,30 +1,18 @@
-"""Read-only checks for E0.1. This is NOT a 1C compiler or a database test.
+"""Narrow text checks of 1C 7.7 modules, written for E0.1 and used by the static checks of check_e02+.
 
-Run: python reports/check_e01.py --output-prefix <new-prefix>
-Optional full legacy suite: python reports/check_e01.py --run-tests --output-prefix <new-prefix>
-Output is restricted to this reports directory; source/ERT/database are not edited.
-Existing protocols are not overwritten unless --overwrite is given.
-The optional ERT reader is discovered from the project's sync_modules.bat.
-Static checks include 1C 7.7 declaration order (calls before definition need "Далее"),
-forward signatures, form identifiers, built-in names used as variables and global calls
-missing from the installed 1C 7.7 syntax helper (both modules); they are narrow text checks,
-not a compiler.
+This is NOT a 1C compiler: declaration order (calls before definition need "Далее"), forward signatures, form
+identifiers, built-in names used as variables, global calls missing from the installed 1C 7.7 syntax helper, and the
+TXT/ERT comparison through the ERT reader named in sync_modules.bat. The E0.1 run of this script against the
+diagnostic agent kudir_export_agent was removed with the agent after KP0.5 (13.10.2026); it is in the git history.
 """
 
 from pathlib import Path
-from collections import Counter
-import argparse
 import hashlib
 import importlib.util
-import json
-import os
 import re
-import subprocess
 import sys
-from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-HERE = Path(__file__).resolve().parent
 sys.dont_write_bytecode = True
 sys.stdout.reconfigure(encoding="utf-8")
 TOKEN = re.compile(r'"(?:[^"\n]|"")*"|//[^\n]*')
@@ -191,7 +179,7 @@ def load_module(name, path):
     return module
 
 
-def ert_checks():
+def ert_checks(stems=("kudir_export",)):
     sync = read(ROOT / "sync_modules.bat")
     match = re.search(r'SYNC_PY=([^"\r\n]+)', sync)
     reader = Path(match[1]).with_name("ert_module.py") if match else None
@@ -199,7 +187,7 @@ def ert_checks():
         return {"status": "NOT_CHECKED", "reason": "local read-only ERT reader unavailable"}
     module = load_module("_e01_ert_reader", reader)
     results = {"reader": str(reader), "reader_sha256": hashlib.sha256(reader.read_bytes()).hexdigest()}
-    for stem in ("kudir_export", "kudir_export_agent"):
+    for stem in stems:
         path = ROOT / "1cv77-extforms" / f"{stem}.ert"
         extracted = module.extract_text(path).replace("\r\n", "\n").replace("\r", "\n").strip("\ufeff\n")
         source = read(ROOT / "1cv77" / f"{stem}.txt").strip("\ufeff\n")
@@ -224,137 +212,3 @@ def ert_checks():
             "dialog_contains_legacy_action": "Сформировать".encode("cp1251") in dialog,
         }
     return results
-
-
-def clock_test_diagnosis():
-    sys.path.insert(0, str(ROOT / "src"))
-    from kudir.diagnostics import AnalysisLog
-    from kudir.loaders import ExchangeBundle
-    from kudir.matcher import Engine
-    from kudir.scoring import load_scoring
-    cfg = load_scoring(ROOT / "config" / "scoring.yaml")
-    timeout = float(cfg.s("timeout_seconds_per_counterparty"))
-    cases = {}
-    for label, ticks in (("clock_unchanged", (1000.0, 1000.0)), ("clock_advanced", (1000.0, 1001.0))):
-        bundle = ExchangeBundle(directory=ROOT, manifest={}, payments=[], ledger=[], documents=[], openings=[])
-        engine = Engine(bundle=bundle, cfg=cfg, log=AnalysisLog())
-        with patch("kudir.matcher.time.monotonic", side_effect=ticks) as clock:
-            first = engine._timeout_deadline("C1")
-            second = engine._timeout_deadline("C1")
-            other = engine._timeout_deadline("C2")
-            again = engine._timeout_deadline("C2")
-        passed = first == second == ticks[0] + timeout and other == again == ticks[1] + timeout and clock.call_count == 2 and set(engine._cp_deadline) == {"C1", "C2"}
-        cases[label] = {"passed": passed, "clock_calls": clock.call_count, "first_deadline": first, "other_deadline": other}
-    return cases
-
-
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--run-tests", action="store_true")
-    parser.add_argument("--output-prefix", default="e01")
-    parser.add_argument("--overwrite", action="store_true", help="replace existing protocols with the same prefix")
-    args = parser.parse_args()
-    if not re.fullmatch(r"[A-Za-z0-9_-]+", args.output_prefix):
-        parser.error("output-prefix must be a file name without path separators")
-    planned = [HERE / f"{args.output_prefix}-checks.json"] + ([HERE / f"{args.output_prefix}-tests.txt"] if args.run_tests else [])
-    existing = [p.name for p in planned if p.exists()]
-    if existing and not args.overwrite:
-        parser.error("protocol already exists, choose a new --output-prefix or pass --overwrite: " + ", ".join(existing))
-    target = ROOT / "1cv77" / "kudir_export_agent.txt"
-    source = read(target)
-    original = read(ROOT / "1cv77" / "kudir_export.txt")
-    definitions, duplicates, forward = routines(source)
-    current, _, current_forward = routines(original)
-    # The agent is a copy of kudir_export as accepted at E0.1 (commit ae02186); later export stages
-    # (E0.2+) change that module, so the "legacy routines unchanged" check uses the E0.1 version.
-    accepted = subprocess.run(["git", "show", "ae02186:1cv77/kudir_export.txt"], cwd=ROOT, capture_output=True)
-    baseline = routines(accepted.stdout.decode("utf-8-sig"))[0] if accepted.returncode == 0 else current
-    helper = syntax_helper_names()
-    calls = set(re.findall(r"\b(КУДиР_\w+)\s*\(", code_only(source), re.I))
-    reached = set()
-    pending = ["ДиагностикаЭ01"]
-    while pending:
-        name = pending.pop()
-        if name in reached or name not in definitions:
-            continue
-        reached.add(name)
-        pending.extend(re.findall(r"\b(КУДиР_\w+)\s*\(", code_only(definitions[name]["text"])))
-    results = {
-        "scope": "source/ERT/legacy Python tests; NO execution or compilation in 1C 7.7",
-        "python": sys.version,
-        "source_sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
-        "source_version": source.splitlines()[0],
-        "routines": len(definitions),
-        "added_routines": sorted(set(definitions) - set(baseline)),
-        "changed_existing_routines_ignoring_comments": [name for name in baseline if name not in definitions or canonical(baseline[name]["text"]) != canonical(definitions[name]["text"])],
-        "duplicate_routines": duplicates,
-        "unresolved_local_helpers": sorted(calls - definitions.keys()),
-        "forward_declarations_without_body": sorted(forward - definitions.keys()),
-        "calls_before_definition_without_forward": calls_before_definition(source, definitions, forward),
-        "forward_signature_mismatch": forward_mismatches(source),
-        "lexical": lexical_checks(source),
-        "builtin_name_clashes": builtin_name_clashes(source),
-        "syntax_helper": str(SYNTAX_HELPER) if helper is not None else "NOT_CHECKED: 1C 7.7 syntax helper not found",
-        "unknown_global_calls": unknown_global_calls(source, helper) if helper is not None else None,
-        "legacy_export": {
-            "source_version": original.splitlines()[0],
-            "builtin_name_clashes": builtin_name_clashes(original),
-            "unknown_global_calls": unknown_global_calls(original, helper) if helper is not None else None,
-            "calls_before_definition_without_forward": calls_before_definition(original, current, current_forward),
-            "forward_signature_mismatch": forward_mismatches(original),
-        },
-        "diagnostic_reachable_routines": sorted(reached),
-        "diagnostic_reaches_export_or_python": bool(reached & {"КУДиР_Выполнить", "КУДиР_ЗаписатьВыгрузку", "КУДиР_ЗапуститьPython"}),
-        "diagnostic_reaches_legacy_log": bool(reached & {"КУДиР_НачатьЛог", "КУДиР_ДописатьЛог", "КУДиР_ПисатьЛог"}),
-        "ert": ert_checks(),
-        "isolated_timeout_test": clock_test_diagnosis(),
-        "existing_source_tests_target": "1cv77/kudir_export.txt, not kudir_export_agent.txt",
-    }
-    source.encode("cp1251")  # Strict encoding check, not a write/conversion.
-    results["cp1251_representable"] = True
-    tests_output = HERE / f"{args.output_prefix}-tests.txt"
-    # Without --run-tests no earlier protocol is reported as a current result.
-    results["tests_run"] = bool(args.run_tests)
-    if args.run_tests:
-        completed = subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "tests", "-v"], cwd=ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace", env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONDONTWRITEBYTECODE": "1"})
-        tests_output.write_text(completed.stdout + completed.stderr, encoding="utf-8")
-        results["test_process_exit_code"] = completed.returncode
-        text = read(tests_output)
-        results["saved_test_run"] = {
-            "file": str(tests_output.relative_to(ROOT)),
-            "counts": dict(Counter(re.findall(r"\.\.\. (ok|FAIL|ERROR|skipped)\b", text))),
-            "summary": re.findall(r"^(?:Ran \d+ tests.*|FAILED .*|OK.*)$", text, re.M),
-        }
-    failures = []
-    for field in ("duplicate_routines", "unresolved_local_helpers", "forward_declarations_without_body", "calls_before_definition_without_forward", "forward_signature_mismatch", "changed_existing_routines_ignoring_comments", "diagnostic_reaches_export_or_python", "diagnostic_reaches_legacy_log"):
-        if results[field]:
-            failures.append(field)
-    if any(results["lexical"].values()):
-        failures.append("lexical")
-    if results["builtin_name_clashes"]:
-        failures.append("builtin_name_clashes")
-    if results["unknown_global_calls"]:
-        failures.append("unknown_global_calls")
-    if any(results["legacy_export"][field] for field in ("builtin_name_clashes", "unknown_global_calls", "calls_before_definition_without_forward", "forward_signature_mismatch")):
-        failures.append("legacy export static checks")
-    legacy_ert = results["ert"].get("kudir_export", {})
-    if not legacy_ert.get("module_matches_text") or legacy_ert.get("undeclared_form_identifiers", ["ERT not read"]):
-        failures.append("legacy export ERT parity/form identifiers")
-    if not all(case["passed"] for case in results["isolated_timeout_test"].values()):
-        failures.append("timeout test")
-    ert = results["ert"].get("kudir_export_agent", {})
-    if not ert.get("module_matches_text") or not ert.get("diagnostic_button_formula"):
-        failures.append("ERT parity/action not verified")
-    if ert.get("undeclared_form_identifiers", ["ERT not read"]):
-        failures.append("undeclared form identifiers")
-    if results.get("test_process_exit_code", 0) != 0:
-        failures.append("unit tests")
-    results["failed_checks"] = failures
-    output = HERE / f"{args.output_prefix}-checks.json"
-    output.write_text(json.dumps(results, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(json.dumps(results, ensure_ascii=False, indent=2))
-    return bool(failures)
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
