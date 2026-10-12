@@ -133,15 +133,17 @@ End Sub
 '''
 
 
-def prepare(out: Path, ert: Path, commands: list[str], start: str, end: str) -> tuple[dict, dict]:
+def prepare(out: Path, ert: Path | None, commands: list[str], start: str, end: str, controller: str = CONTROLLER) -> tuple[dict, dict]:
+    """Session files; without an ERT (another client, e.g. run_1c_sheet) the controller gets an empty path."""
     from module_suite77 import vb_assignment, vb_literal
     from shutdown77 import atomic_json, prepare_shutdown, sha256
 
     run_id = str(uuid.uuid4())
     out.mkdir(parents=False, exist_ok=False)
     target = out / "kudir_export.ert"
-    target.write_bytes(ert.read_bytes())
-    (out / "controller.1s").write_text(CONTROLLER, encoding="utf-8")
+    if ert is not None:
+        target.write_bytes(ert.read_bytes())
+    (out / "controller.1s").write_text(controller, encoding="utf-8")
     protocols = out / PROTOCOL_DIRECTORY
     protocols.mkdir()
     platform = HARNESS / "research" / "platform77"
@@ -149,16 +151,19 @@ def prepare(out: Path, ert: Path, commands: list[str], start: str, end: str) -> 
     utilities = suite[suite.index("Function Quote"):suite.index("Sub CompileCase")]
     shutdown, shutdown_manifest = prepare_shutdown(out, run_id)
     client = CLIENT.replace("__PROXY_IDENTITY__", (platform / "proxy_identity77.vbs").read_text(encoding="utf-8"))
-    for key, value in {"RUN_ID": vb_literal(run_id), "ERT_PATH": vb_literal(str(target)),
-                       "SOURCES": vb_assignment("sourceController", CONTROLLER), "UTILITIES": utilities,
+    # vb_literal("") is empty text, not "": an absent ERT is passed as the VBScript literal "".
+    for key, value in {"RUN_ID": vb_literal(run_id), "ERT_PATH": vb_literal(str(target)) if ert is not None else '""',
+                       "SOURCES": vb_assignment("sourceController", controller), "UTILITIES": utilities,
                        "COMMANDS": ", ".join(vb_literal(c) for c in commands), "SHUTDOWN": shutdown,
                        "START": vb_literal(start), "END": vb_literal(end), "PROTOCOL_ROOT": vb_literal(str(protocols))}.items():
         client = client.replace("__" + key + "__", value)
     (out / "client.vbs").write_text(client, encoding="utf-16")
     shutdown_manifest["sources"]["client.vbs"] = sha256(out / "client.vbs")
+    sources = ("kudir_export.ert", "controller.1s", "client.vbs") if ert is not None else ("controller.1s", "client.vbs")
     manifest = {"schema_version": 1, "run_id": run_id, "commands": commands, "window": [start, end],
-                "ert_path": str(target), "ert_source": str(ert), "ert_sha256": sha256(target),
-                "sources": {name: sha256(out / name) for name in ("kudir_export.ert", "controller.1s", "client.vbs")}}
+                "ert_path": str(target) if ert is not None else None, "ert_source": str(ert) if ert is not None else None,
+                "ert_sha256": sha256(target) if ert is not None else None,
+                "sources": {name: sha256(out / name) for name in sources}}
     atomic_json(out / "kudir-manifest.json", manifest)
     atomic_json(out / "shutdown-manifest.json", shutdown_manifest)
     return manifest, shutdown_manifest
@@ -228,24 +233,20 @@ def read_results(out: Path, manifest: dict) -> dict:
     return result
 
 
-def main(argv: list[str] | None = None) -> int:
-    sys.stdout.reconfigure(encoding="utf-8")
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+def session_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--output", type=Path, required=True, help="fresh directory, ASCII without spaces (CDB technical files)")
-    parser.add_argument("--command", choices=("check", "e05"), default="check")
     parser.add_argument("--start", default="2026-01-01")
     parser.add_argument("--end", default="2026-01-31")
-    parser.add_argument("--ert", type=Path, default=ROOT / "1cv77-extforms" / "kudir_export.ert")
     parser.add_argument("--base", type=Path, help="another copy of the same base (default: harness77 base-for-test)")
     parser.add_argument("--user", default="ВВВ")
     parser.add_argument("--session-seconds", type=int, default=900, help="whole guarded session, including shutdown")
-    args = parser.parse_args(argv)
-    for value in (args.start, args.end):
-        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
-            parser.error("dates are YYYY-MM-DD")
+
+
+def guarded_session(args: argparse.Namespace, commands: list[str], controller: str, ert: Path | None, scope: str, judge) -> tuple[int, dict]:
+    """One guarded 1C session of the harness77 core: the controller's Kudir77 is called once per command.
+    judge(operations) -> True when the client's own result is a failure. Returns the exit code and the report."""
     if "KUDIR_PROTO_ROOT" not in os.environ:
         os.environ["KUDIR_PROTO_ROOT"] = str(ROOT)
-
     sys.path.insert(0, str(HARNESS / "research" / "platform77"))
     import desktop77
     import shutdown77
@@ -264,8 +265,7 @@ def main(argv: list[str] | None = None) -> int:
 
     desktop77.DesktopProcess = LongClient
 
-    commands = ["check"] if args.command == "check" else ["check", "e05"]
-    report = {"schema_version": 1, "scope": f"KUDiR E0.5 ERT on {args.base or 'base-for-test'}", "shutdown_mode": MODE, "fault": "none",
+    report = {"schema_version": 1, "scope": scope, "shutdown_mode": MODE, "fault": "none",
               "status": "blocked", "ert_operation_timeout_seconds": args.session_seconds - 30,
               "identity_observer_profile": "challenge-only-v2", "client_log_profile": "held-streams-v2"}
     gate = HARNESS / ".artifacts" / "platform77" / "active-session.json"
@@ -278,14 +278,15 @@ def main(argv: list[str] | None = None) -> int:
         if sha256(identity) != IDENTITY_SHA:
             raise ValueError("unqualified proxy inspector")
         (preflight if base == qualified else preflight_copy)(base, EXE.resolve(strict=True), CDB.resolve(strict=True), helper, out)
-        ert = args.ert.resolve(strict=True)
-        if not (base / "kudir_source_id.txt").is_file():
-            raise ValueError("the base has no kudir_source_id.txt: the export would refuse to start")
+        if ert is not None:
+            ert = ert.resolve(strict=True)
+            if not (base / "kudir_source_id.txt").is_file():
+                raise ValueError("the base has no kudir_source_id.txt: the export would refuse to start")
         gate.parent.mkdir(parents=True, exist_ok=True)
         with gate.open("x", encoding="utf-8") as stream:
             owns_gate = True
-            stream.write(json.dumps({"output": str(out), "scope": "KUDiR ERT"}))
-        manifest, shutdown_manifest = prepare(out, ert, commands, args.start, args.end)
+            stream.write(json.dumps({"output": str(out), "scope": scope}))
+        manifest, shutdown_manifest = prepare(out, ert, commands, args.start, args.end, controller)
         report["run_id"] = manifest["run_id"]
         report["ert_commands"] = commands
         from session77 import run_session
@@ -297,9 +298,7 @@ def main(argv: list[str] | None = None) -> int:
         operations = report["kudir"]["operations"]
         blocked = bool(report.get("error") or report["kudir"]["issues"] or report["shutdown_assessment"]["status"] != "passed"
                        or [o["name"] for o in operations] != commands)
-        failed = any(o["diagnostics"] or not o["loaded"] for o in operations) or any(
-            o["name"] == "e05" and o.get("set_result") not in ("PASS", "INCOMPLETE") for o in operations)
-        report["status"] = "blocked" if blocked else "failed" if failed else "passed"
+        report["status"] = "blocked" if blocked else "failed" if judge(operations) else "passed"
         atomic_json(out / "run.json", report)
         if report.get("cleanup_verified") and report["desktop_closed"]:
             gate.unlink()
@@ -309,14 +308,34 @@ def main(argv: list[str] | None = None) -> int:
         brief["operations"] = [{k: o.get(k) for k in ("name", "elapsed_ms", "loaded", "diagnostics", "actual", "set_result", "set_summary")} for o in operations]
         brief["issues"] = report["kudir"]["issues"]
         print(json.dumps(brief, ensure_ascii=False, indent=2))
-        return {"passed": 0, "failed": 1, "blocked": 2}[report["status"]]
+        return {"passed": 0, "failed": 1, "blocked": 2}[report["status"]], report
     except Exception as error:
         report["error"] = f"{type(error).__name__}: {error}"
         report["active_gate_retained"] = owns_gate
         if out.exists():
             atomic_json(out / "run.json", report)
         print(json.dumps({k: report.get(k) for k in ("status", "error", "active_gate_retained")}, ensure_ascii=False, indent=2))
-        return 2
+        return 2, report
+
+
+def judge_ert(operations: list[dict]) -> bool:
+    return any(o["diagnostics"] or not o["loaded"] for o in operations) or any(
+        o["name"] == "e05" and o.get("set_result") not in ("PASS", "INCOMPLETE") for o in operations)
+
+
+def main(argv: list[str] | None = None) -> int:
+    sys.stdout.reconfigure(encoding="utf-8")
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    session_arguments(parser)
+    parser.add_argument("--command", choices=("check", "e05"), default="check")
+    parser.add_argument("--ert", type=Path, default=ROOT / "1cv77-extforms" / "kudir_export.ert")
+    args = parser.parse_args(argv)
+    for value in (args.start, args.end):
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+            parser.error("dates are YYYY-MM-DD")
+    commands = ["check"] if args.command == "check" else ["check", "e05"]
+    code, _ = guarded_session(args, commands, CONTROLLER, args.ert, f"KUDiR E0.5 ERT on {args.base or 'base-for-test'}", judge_ert)
+    return code
 
 
 if __name__ == "__main__":

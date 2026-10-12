@@ -651,6 +651,52 @@ def compare_packages(first: Path, second: Path) -> tuple[Findings, dict]:
 
 # --- reconciliation sheet ------------------------------------------------------------------------------
 
+def sample_customers(day: dict[str, dict[tuple, dict]]) -> list[tuple[str, str]]:
+    """Customers of the sheet (section 2): an incoming balance on several contracts, an incoming balance, a balance
+    that arose in 2026, a balance on the empty contract. Also used by run_1c_sheet to fill the sheet from 1C."""
+    dates = sorted(day)
+    first = day.get(HISTORY_START, {})
+    contracts_of = Counter(k[1] for k, r in first.items() if k[0] == "CUSTOMER_CONTRACT" and signed(r))
+    incoming = [k[1] for k, r in first.items() if k[0] == "CUSTOMER" and signed(r)]
+    samples = []
+    several = [c for c in incoming if contracts_of[c] > 1]
+    samples += [("входящий остаток по нескольким договорам", c) for c in several[:1]]
+    samples += [("входящий остаток", c) for c in incoming if c not in several][:1]
+    changing = [k[1] for k, r in day.get(dates[-1], {}).items() if k[0] == "CUSTOMER" and signed(r) and k[1] not in incoming] if dates else []
+    samples += [("остаток возник в 2026 году", c) for c in changing[:1]]
+    empty = [k[1] for d in dates for k, r in day[d].items() if k[2] == "EMPTY" and signed(r)]
+    samples += [("остаток по пустому договору", c) for c in empty[:1]]
+    return samples
+
+
+def sample_documents(by_doc: dict[str, list[dict]], before: dict[str, dict]) -> list[tuple[str, str, str]]:
+    """Money documents of the sheet (section 3) as (reason, document, customer)."""
+    def find(predicate) -> str | None:
+        return next((doc for doc, rows in by_doc.items() if doc in before and predicate(rows)), None)
+
+    def payers(rows: list[dict]) -> Counter:
+        return Counter(r["КонтрагентID"] for r in rows if r["MovementRole"] == "CASH_IN")
+
+    chosen = []
+    cash = find(lambda rows: rows[0]["ВидДокумента"].upper() == "ПРИХОДНЫЙОРДЕР")
+    if cash:
+        chosen.append(("приходный кассовый ордер", cash, by_doc[cash][0]["КонтрагентID"]))
+    statement = find(lambda rows: rows[0]["ВидДокумента"].upper() == "ВЫПИСКА" and len(payers(rows)) > 3)
+    if statement:
+        customer = payers(by_doc[statement]).most_common()[-1][0]
+        chosen.append(("выписка с оплатами нескольких покупателей", statement, customer))
+    twice = find(lambda rows: rows[0]["ВидДокумента"].upper() == "ВЫПИСКА" and any(n > 1 for n in payers(rows).values()))
+    if twice:
+        chosen.append(("две оплаты одного покупателя в выписке — один снимок", twice, payers(by_doc[twice]).most_common(1)[0][0]))
+    refund = find(lambda rows: any(r["MovementRole"] == "CASH_OUT" for r in rows))
+    if refund:
+        chosen.append(("возврат денег покупателю", refund, next(r["КонтрагентID"] for r in by_doc[refund] if r["MovementRole"] == "CASH_OUT")))
+    manual = find(lambda rows: rows[0]["ВидДокумента"].upper() == "ОПЕРАЦИЯ")
+    if manual:
+        chosen.append(("ручная операция с деньгами (UNKNOWN)", manual, by_doc[manual][0]["КонтрагентID"]))
+    return chosen
+
+
 def sheet(directory: Path) -> str:
     local = Findings()
     ledger = read_table(directory, LEDGER_FILE, LEDGER_HEADER, local) or []
@@ -742,17 +788,7 @@ def sheet(directory: Path) -> str:
         out.append("| Движения ledger62 за квартал | " + " | ".join(rub(moves[d]) for d in dates) + " |")
         return out
 
-    first = day.get(HISTORY_START, {})
-    contracts_of = Counter(k[1] for k, r in first.items() if k[0] == "CUSTOMER_CONTRACT" and signed(r))
-    incoming = [k[1] for k, r in first.items() if k[0] == "CUSTOMER" and signed(r)]
-    samples = []
-    several = [c for c in incoming if contracts_of[c] > 1]
-    samples += [("входящий остаток по нескольким договорам", c) for c in several[:1]]
-    samples += [("входящий остаток", c) for c in incoming if c not in several][:1]
-    changing = [k[1] for k, r in day.get(dates[-1], {}).items() if k[0] == "CUSTOMER" and signed(r) and k[1] not in incoming] if dates else []
-    samples += [("остаток возник в 2026 году", c) for c in changing[:1]]
-    empty = [k[1] for d in dates for k, r in day[d].items() if k[2] == "EMPTY" and signed(r)]
-    samples += [("остаток по пустому договору", c) for c in empty[:1]]
+    samples = sample_customers(day)
     lines += ["### Примеры покупателей", "",
               "Для каждого покупателя откройте ОСВ по счёту 62 с разворотом по контрагентам и договорам (или карточку счёта 62 по покупателю) на начало каждой даты: сальдо покупателя и каждого договора должно совпасть. Разность соседних дат равна движениям ledger62 за квартал — это проверено автоматически, в 1С достаточно сверить сами остатки.", ""]
     for reason, customer in samples:
@@ -782,29 +818,7 @@ def sheet(directory: Path) -> str:
             out.append(f"- {title}: до документа {balance(row)}; движения документа {rub(change)}; после документа {after}")
         return out + [""]
 
-    def find(predicate) -> str | None:
-        return next((doc for doc, rows in by_doc.items() if doc in before and predicate(rows)), None)
-
-    def payers(rows: list[dict]) -> Counter:
-        return Counter(r["КонтрагентID"] for r in rows if r["MovementRole"] == "CASH_IN")
-
-    chosen = []
-    cash = find(lambda rows: rows[0]["ВидДокумента"].upper() == "ПРИХОДНЫЙОРДЕР")
-    if cash:
-        chosen.append(("приходный кассовый ордер", cash, by_doc[cash][0]["КонтрагентID"]))
-    statement = find(lambda rows: rows[0]["ВидДокумента"].upper() == "ВЫПИСКА" and len(payers(rows)) > 3)
-    if statement:
-        customer = payers(by_doc[statement]).most_common()[-1][0]
-        chosen.append(("выписка с оплатами нескольких покупателей", statement, customer))
-    twice = find(lambda rows: rows[0]["ВидДокумента"].upper() == "ВЫПИСКА" and any(n > 1 for n in payers(rows).values()))
-    if twice:
-        chosen.append(("две оплаты одного покупателя в выписке — один снимок", twice, payers(by_doc[twice]).most_common(1)[0][0]))
-    refund = find(lambda rows: any(r["MovementRole"] == "CASH_OUT" for r in rows))
-    if refund:
-        chosen.append(("возврат денег покупателю", refund, next(r["КонтрагентID"] for r in by_doc[refund] if r["MovementRole"] == "CASH_OUT")))
-    manual = find(lambda rows: rows[0]["ВидДокумента"].upper() == "ОПЕРАЦИЯ")
-    if manual:
-        chosen.append(("ручная операция с деньгами (UNKNOWN)", manual, by_doc[manual][0]["КонтрагентID"]))
+    chosen = sample_documents(by_doc, before)
     for reason, doc, customer in chosen:
         lines += example(reason, doc, customer)
     if not chosen:
