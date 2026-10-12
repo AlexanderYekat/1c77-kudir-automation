@@ -1,5 +1,5 @@
-"""Э0.2-Э0.4: инварианты исходника блока КУДиР4_ в 1cv77/kudir_export.txt (ТЗ №1 §§5-18, 21-23, 27, 30;
-ТЗ №4 §§4-8, 13).
+"""Э0.2-Э0.5: инварианты исходника блока КУДиР4_ в 1cv77/kudir_export.txt (ТЗ №1 §§5-18, 21-23.4, 27, 30;
+ТЗ №4 §§4-9, 13, 19).
 
 1С 7.7 в CI нет: проверяется текст модуля. Компиляцию и запуск выполняет владелец в 1С.
 """
@@ -18,6 +18,7 @@ sys.path.insert(0, str(ROOT / "reports"))
 import check_e02 as chk  # noqa: E402
 import check_e03 as chk3  # noqa: E402
 import check_e04 as chk4  # noqa: E402
+import check_e05 as chk5  # noqa: E402
 
 
 def body(src: str, name: str) -> str:
@@ -50,6 +51,8 @@ class ExportV4SourceTests(unittest.TestCase):
         self.assertEqual(returned_literal(self.src, "КУДиР4_ЗаголовокДвижений").split(";"), chk3.LEDGER_HEADER)
         self.assertEqual(returned_literal(self.src, "КУДиР4_ЗаголовокСамопроверки").split(";"), chk.SELFTEST_HEADER)
         self.assertEqual(returned_literal(self.src, "КУДиР4_ЗаголовокДокументов").split(";"), chk4.DOCUMENTS_HEADER)
+        self.assertEqual(returned_literal(self.src, "КУДиР4_ЗаголовокСнимков").split(";"), chk5.SNAPSHOTS_HEADER)
+        self.assertEqual(returned_literal(self.src, "КУДиР4_ЗаголовокКварталов").split(";"), chk5.QUARTERS_HEADER)
 
     def test_source_has_no_overlong_physical_lines(self) -> None:
         self.assertEqual(chk.source_line_length_issues(self.src), [])
@@ -127,7 +130,7 @@ class ExportV4SourceTests(unittest.TestCase):
         self.assertLess(finish.index("КУДиР4_ЗакрытьДанные()"), finish.index("КУДиР4_ЗакрытьДиаг()"))
         self.assertLess(finish.index("КУДиР4_ЗакрытьДиаг()"), finish.index('КУДиР4_ЗаписатьСтатус("FAILED")'))
         self.assertIn("КУДиР4_ЗакрытьОстаток()", active(body(self.src, "КУДиР4_Сбросить")))
-        stages = active(body(self.src, "КУДиР4_ЭтапыЭ04"))
+        stages = active(body(self.src, "КУДиР4_ЭтапыЭ05"))
         self.assertEqual(stages.count("Попытка"), stages.count("КУДиР4_Фатально(ОписаниеОшибки())"))
         self.assertLess(stages.index("КУДиР4_ЗакрытьКарту()"), stages.index("КУДиР4_ПроверитьОбратимость()"))
         self.assertLess(stages.index("КУДиР4_ОбойтиПроводки(датанач, датакон, 1"), stages.index("КУДиР4_ОбойтиПроводки(датанач, датакон, 2"))
@@ -136,17 +139,24 @@ class ExportV4SourceTests(unittest.TestCase):
         self.assertLess(stages.index("КУДиР4_ОбойтиДокументы(датанач, датакон, 1"), stages.index("КУДиР4_ЗакрытьКарту()"))
         self.assertLess(stages.index("КУДиР4_ЗакрытьКарту()"), stages.index("КУДиР4_ОбойтиДокументы(датанач, датакон, 2"))
         self.assertLess(stages.index("КУДиР4_ОбойтиДокументы(датанач, датакон, 2"), stages.index("КУДиР4_ПроверитьОбратимость()"))
+        # Снимки и контроли - после первого чтения (им нужна вся аналитика ledger62 и documents) и до закрытия id_map:
+        # договоры входящих остатков регистрируются в нём (№1 §23.3).
+        self.assertLess(stages.index("КУДиР4_ОбойтиДокументы(датанач, датакон, 1"), stages.index("КУДиР4_СнимкиГраниц();"))
+        self.assertLess(stages.index("КУДиР4_СнимкиГраниц();"), stages.index("КУДиР4_СнимкиПередДокументами();"))
+        self.assertLess(stages.index("КУДиР4_СнимкиПередДокументами();"), stages.index("КУДиР4_КонтролиКварталов(датакон);"))
+        self.assertLess(stages.index("КУДиР4_КонтролиКварталов(датакон);"), stages.index("КУДиР4_ЗакрытьКарту()"))
 
     def test_empty_window_is_incomplete_not_pass(self) -> None:
         # Без строк ledger62 итог INCOMPLETE; export_status остаётся WRITING. Число строк учитывается и при сбое
         # этапа (замечание журнала КП0.2: «итог: 0» при частично записанном файле).
-        stages = active(body(self.src, "КУДиР4_ЭтапыЭ04"))
+        stages = active(body(self.src, "КУДиР4_ЭтапыЭ05"))
         self.assertLess(stages.index("КонецПопытки;"), stages.index("гл4ЗаписейДвижений = гл4СтрокДанных;"))
         self.assertIn("гл4ЗаписейДокументов = гл4СтрокДанных;", stages)
         finish = active(body(self.src, "КУДиР4_Завершить"))
         self.assertIn("Если гл4ЗаписейДвижений = 0 Тогда", finish)
         self.assertIn("Если гл4ЗаписейДокументов = 0 Тогда", finish)
-        self.assertEqual(finish.count('ИтогНабора = "INCOMPLETE";'), 2)
+        self.assertEqual(finish.count('ИтогНабора = "INCOMPLETE";'), 3)
+        self.assertIn("Если гл4СнДокументов = 0 Тогда", finish)
         self.assertLess(finish.index('ИтогНабора = "FAIL";'), finish.index('ИтогНабора = "INCOMPLETE";'))
         self.assertIn("гл4ЗаписейДвижений = 0;", active(body(self.src, "КУДиР4_Сбросить")))
 
@@ -168,8 +178,8 @@ class ExportV4SourceTests(unittest.TestCase):
     def test_legacy_v2_button_disabled(self) -> None:
         legacy = active(body(self.src, "Сформировать"))
         self.assertNotIn("КУДиР_Выполнить", legacy)
-        self.assertIn("КУДиР4_НаборЭ04(выбДатаНач, выбДатаКонец)", active(body(self.src, "ВыгрузкаЭ04")))
-        self.assertIn("«Набор Э0.4»", legacy)
+        self.assertIn("КУДиР4_НаборЭ05(выбДатаНач, выбДатаКонец)", active(body(self.src, "ВыгрузкаЭ05")))
+        self.assertIn("«Набор Э0.5»", legacy)
 
 
 class ExportLedgerSourceTests(unittest.TestCase):
@@ -184,17 +194,18 @@ class ExportLedgerSourceTests(unittest.TestCase):
 
     def test_version_line_matches_start_line(self) -> None:
         version = re.match(r"// version: (\S+) ", self.src)[1]
-        self.assertIn(f'"START Э0.4 version={version} run_id="', active(body(self.src, "КУДиР4_НачатьЗапуск")))
+        self.assertIn(f'"START Э0.5 version={version} run_id="', active(body(self.src, "КУДиР4_НачатьЗапуск")))
 
     def test_run_labels_match_checker(self) -> None:
         # Ревью -04: журнал писал END Э0.3, а check_e04 ищет END Э0.4 - успешный набор считался прерванным (FAIL).
+        # С Э0.5 метки запуска - Э0.5, их ищет check_e05.
         start = re.findall(r'"START (\S+) version=', active(body(self.src, "КУДиР4_НачатьЗапуск")))
         end = re.findall(r'"END (\S+) итог=', active(body(self.src, "КУДиР4_Завершить")))
-        self.assertEqual(start, [chk4.LABEL])
-        self.assertEqual(end, [chk4.LABEL])
+        self.assertEqual(start, [chk5.LABEL])
+        self.assertEqual(end, [chk5.LABEL])
         # Ни одна строка запуска набора не называет прежний этап (комментарии не в счёт).
         literals = re.findall(r'"[^"\n]*"', self.v4)
-        self.assertEqual([s for s in literals if "Э0.3" in s], [])
+        self.assertEqual([s for s in literals if "Э0.3" in s or "Э0.4" in s], [])
 
     def test_row_has_all_contract_fields_in_order(self) -> None:
         # 37 значений СписокЗначений в порядке заголовка №1 §12; последние - поля оплаты.
@@ -371,7 +382,7 @@ class ExportDocumentsSourceTests(unittest.TestCase):
         columns = active(body(self.src, "КУДиР4_КолонкиВида"))
         self.assertEqual(re.findall(r'Нужные\.ДобавитьЗначение\("(\w+)"', columns), ["Сумма", "НДС", "Всего"])
         # Документы с НДС «сверху» перечисляются в журнале для сверки КП0.4 (их разбирает check_e04 sheet).
-        self.assertIn('КУДиР_Лог("' + chk4.VAT_ON_TOP_LOG + '" + Описание', self.doc)
+        self.assertIn('КУДиР_Лог("' + chk5.VAT_ON_TOP_LOG + '" + Описание', self.doc)
 
     def test_document_amount_from_gross_total_or_rows(self) -> None:
         # У счёта колонка Сумма без итога («Реквизит не имеет итога по колонке!»); если и итог Всего не читается -
@@ -425,6 +436,166 @@ class ExportDocumentsSourceTests(unittest.TestCase):
         self.assertIn('ИдДог = "D|" + ИдВладельца + "|" + СокрЛП(Дог.Код);', analytics)
         self.assertIn("КУДиР_СтрокиРавны(ИдВладельца, ИдКонтр) = 0", analytics)
         self.assertIn('"ANALYTICS_UNKNOWN", "договор документа "', analytics)
+
+
+class ExportSnapshotsSourceTests(unittest.TestCase):
+    """Э0.5: balance_snapshots.csv и ledger_quarters.csv по №1 §§23.1, 23.4, 27 в исходнике КУДиР4_."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.src = EXPORT.read_text(encoding="utf-8-sig")
+        cls.day = active(body(cls.src, "КУДиР4_ОстаткиНаДень"))
+        cls.before = active(body(cls.src, "КУДиР4_ОстаткиПередДокументом"))
+        cls.general = active(body(cls.src, "КУДиР4_ОбщиеОстатки"))
+
+    def test_window_starts_at_history_start(self) -> None:
+        # Снимки и контроли строятся по всей области: окно, начатое позже 01.01.2026, не даёт входящих остатков.
+        start = active(body(self.src, "КУДиР4_НачатьЗапуск"))
+        self.assertIn("Если датанач <> Дата(2026, 1, 1) Тогда", start)
+        self.assertLess(start.index("КУДиР4_ПодготовитьКварталы(датакон);"), start.index("КУДиР4_СоздатьКаталогЗапуска()"))
+        quarters = active(body(self.src, "КУДиР4_ПодготовитьКварталы"))
+        self.assertIn("НачКв = Дата(2026, 1, 1);", quarters)
+        self.assertIn("Пока НачКв <= датакон Цикл", quarters)
+        self.assertIn("НачКв = ДобавитьМесяц(НачКв, 3);", quarters)
+
+    def test_day_start_query_form_verified_on_e01(self) -> None:
+        # DAY_START: ВыполнитьЗапрос(День, День), СНД/СНК - остаток до всех движений дня (КП0.1); оба разреза одним
+        # запросом, счёт-группа не выдаётся, вид расчётов не разворачивается.
+        self.assertIn("БухИт.ИспользоватьСубконто(ВидыСубконто.Контрагенты, , 1);", self.day)
+        self.assertIn("БухИт.ИспользоватьСубконто(ВидыСубконто.Договоры, , 1);", self.day)
+        self.assertNotIn("ВидыРасчетовСПокупателями", self.day)
+        self.assertIn("БухИт.ВключатьСубсчета(-1);", self.day)
+        self.assertIn('БухИт.ВыполнитьЗапрос(День, День, "62") = 1', self.day)
+        self.assertIn("КУДиР_Копейки(БухИт.СНД())", self.day)
+        self.assertNotIn("СКД", self.day)
+
+    def test_before_document_query_form_verified_on_e01(self) -> None:
+        # BEFORE_DOCUMENT: конец периода на предыдущей позиции документа, СКД/СКК - сам документ не входит (КП0.1).
+        self.assertIn("БухИт.ИспользоватьСубконто(ВидыСубконто.Контрагенты, Контр, 2);", self.before)
+        self.assertIn('БухИт.ВыполнитьЗапрос(, Пред, "62") = 1', self.before)
+        self.assertIn("КУДиР_Копейки(БухИт.СКД())", self.before)
+        doc = active(body(self.src, "КУДиР4_СнимкиДокумента"))
+        self.assertIn("Пред = СформироватьПозициюДокумента(ДокПоз, -1);", doc)
+        # Позиция восстановленного документа сверяется с ledger62: остаток другой версии не выдаётся за снимок.
+        self.assertLess(doc.index("КУДиР_СтрокиРавны(ПозСейчас, ДокПоз) = 0"), doc.index("Пред = СформироватьПозициюДокумента"))
+
+    def test_contract_traversal_checks_customer_sum(self) -> None:
+        # Внутри запроса сальдо покупателя на счёте сверяется с суммой договоров; расхождение - флаг "B" (WARNING
+        # SNAPSHOT_MISMATCH при сохранённых остатках), непрочитанный договор - флаг "U".
+        traversal = active(body(self.src, "КУДиР4_ДоговорыИтога"))
+        self.assertIn("БухИт.ВыбратьСубконто(2);", traversal)
+        self.assertIn("Дог = БухИт.Субконто(ВидыСубконто.Договоры);", traversal)
+        self.assertIn("Если СуммаДог <> Дт - Кт Тогда", traversal)
+        self.assertIn('КУДиР4_ФлагИтога("B", ИдКонтр)', traversal)
+        self.assertIn('КУДиР4_ФлагИтога("U", ИдКонтр)', traversal)
+        # Компоненты субсчетов складываются, строки итогов адресуются номером (текущая строка не используется).
+        add = active(body(self.src, "КУДиР4_ДобавитьИтог"))
+        self.assertIn('Итоги.УстановитьЗначение(Ном, "Дт", Итоги.ПолучитьЗначение(Ном, "Дт") + Дт);', add)
+
+    def test_unknown_is_empty_not_zero(self) -> None:
+        # Известный ноль - 0/0 только при выполненном запросе; неизвестный остаток - пусто/пусто UNKNOWN (№1 §§21, 23.1).
+        for name in ("КУДиР4_СнимокПокупателя", "КУДиР4_СнимокДоговора"):
+            text = active(body(self.src, name))
+            self.assertLess(text.index('Дт = "";'), text.index("Если Известно = 1 Тогда"))
+            self.assertLess(text.index('Статус = "UNKNOWN";'), text.index("Если Известно = 1 Тогда"))
+            self.assertLess(text.index("Если Известно = 1 Тогда"), text.index('Дт = "0";'))
+        day = active(body(self.src, "КУДиР4_СнимкиНаДень"))
+        self.assertIn('"SNAPSHOT_UNKNOWN", "остатки на начало "', day)
+        before = active(body(self.src, "КУДиР4_СнимкиПокупателяДо"))
+        self.assertIn('"SNAPSHOT_UNKNOWN", "остаток перед документом "', before)
+
+    def test_customer_mismatch_keeps_received_balances(self) -> None:
+        # №1 §27: диагностика не заменяет факт. Сальдо покупателя, не равное сумме договоров, - полученные остатки:
+        # строка остаётся KNOWN с числами, WARNING SNAPSHOT_MISMATCH; SNAPSHOT_UNKNOWN - только невыполненный запрос.
+        customer = active(body(self.src, "КУДиР4_СнимокПокупателя"))
+        self.assertNotIn("SNAPSHOT_UNKNOWN", customer)
+        flag = customer.index('Флаг = КУДиР4_ФлагИтога("B", ИдКонтр);')
+        self.assertLess(customer.index('Статус = "KNOWN";'), flag)
+        self.assertLess(customer.index('Дт = "" + Итоги.ПолучитьЗначение(Ном, "Дт");'), flag)
+        self.assertIn('КУДиР4_Предупреждение("balance_snapshots.csv", КУДиР4_КлючЗаписиСнимка(Вид, ДатаГр, ИдДок, "CUSTOMER", ИдКонтр, "ALL", ""), "ОстатокДтКоп", "SNAPSHOT_MISMATCH",', customer)
+        self.assertNotIn('ФлагИтога("B"', active(body(self.src, "КУДиР4_СнимокДоговора")))
+
+    def test_absent_pair_is_zero_only_when_every_contract_read(self) -> None:
+        # Пары нет в результате: известный ноль, только если нет флага "U"; иначе непрочитанным мог быть именно этот
+        # договор - UNKNOWN пусто/пусто с WARNING ANALYTICS_UNKNOWN на ключе строки, не KNOWN 0/0.
+        pair = active(body(self.src, "КУДиР4_СнимокДоговора"))
+        self.assertIn('Флаг = КУДиР4_ФлагИтога("U", ИдКонтр);', pair)
+        found = pair.index("Если Ном > 0 Тогда")
+        read_all = pair.index("ИначеЕсли ИндИтогов.Exists(Флаг) = 0 Тогда")
+        unread = pair.index("Иначе\n", read_all)
+        self.assertLess(found, read_all)
+        self.assertLess(read_all, pair.index('Дт = "0";'))
+        self.assertLess(pair.index('Дт = "0";'), unread)
+        self.assertIn('КУДиР4_КлючЗаписиСнимка(Вид, ДатаГр, ИдДок, "CUSTOMER_CONTRACT", ИдКонтр, Сост, ИдДог), "Status", "ANALYTICS_UNKNOWN",', pair[unread:])
+        self.assertNotIn('Статус = "KNOWN";', pair[unread:])
+
+    def test_snapshot_row_in_header_order(self) -> None:
+        row = active(body(self.src, "КУДиР4_СтрокаСнимка"))
+        values = re.findall(r"сп\.ДобавитьЗначение\((.*)\);", row)
+        self.assertEqual(values, ["Вид", "ДатаГр", "ИдДок", "Поз", "Разрез", "ИдКонтр", "ИдДог", "Сост", "Дт", "Кт", "Статус"])
+        self.assertEqual(len(values), len(chk5.SNAPSHOTS_HEADER))
+        key = active(body(self.src, "КУДиР4_КлючЗаписиСнимка"))
+        self.assertEqual(re.findall(r"КУДиР4_СтрокаКлюча\((\w+)\)", key), ["Вид", "ДатаГр", "ИдДок", "Разрез", "ИдКонтр", "Сост", "ИдДог"])
+
+    def test_required_analytics_from_ledger_documents_and_incoming(self) -> None:
+        # №1 §23.1: покупатели/договоры входящих остатков, ledger и documents всей области, включая нулевые.
+        side = active(body(self.src, "КУДиР4_СторонаДвижения"))
+        self.assertIn('КУДиР4_АналитикаСнимков("ledger62.csv", ИдКонтр, ЗначениеВСтрокуВнутр(Контр), ИдДог);', side)
+        self.assertIn("КУДиР4_УчестьКвартал(гл4ПрДатаОпер, ИдСтроки);", side)
+        doc = active(body(self.src, "КУДиР4_ДокументКандидат"))
+        self.assertIn('КУДиР4_АналитикаСнимков("documents.csv", ИдКонтр, "", ИдДог);', doc)
+        day = active(body(self.src, "КУДиР4_СнимкиНаДень"))
+        incoming = day.index("Если Первая = 1 Тогда")
+        self.assertLess(incoming, day.index('КУДиР4_АналитикаСнимков("balance_snapshots.csv", ИдКонтр, "", ИдДог);'))
+        self.assertLess(day.index('КУДиР4_АналитикаСнимков("balance_snapshots.csv"'), day.index('гл4СнКлючи.Сортировать("Контр,Дог");'))
+        self.assertIn('"COVERAGE_INCOMPLETE",', day)
+        self.assertLess(day.index('гл4СнКлючи.Сортировать("Контр,Дог");'), day.index("гл4СнКлючи.ВыбратьСтроки();"))
+
+    def test_money_documents_from_written_ledger(self) -> None:
+        # Документ с денежной корреспонденцией 62 (поступление, возврат, неразобранная группа UNKNOWN) - по
+        # корреспондирующему счёту стороны в ledger62.csv; один снимок на документ и покупателя.
+        walk = active(body(self.src, "КУДиР4_СнимкиПередДокументами"))
+        self.assertIn('TS = КУДиР4_ОткрытьЧтение("ledger62.csv", КУДиР4_ЗаголовокДвижений());', walk)
+        self.assertIn("Если КУДиР_ЭтоДенежныйСчет(Корр) = 1 Тогда", walk)
+        self.assertNotIn("MovementRole", walk)
+        self.assertIn("Если (Денежный = 1) И (СтрДлина(ДокИд) > 0) Тогда", walk)
+        doc = active(body(self.src, "КУДиР4_СнимкиДокумента"))
+        self.assertIn("Если Готовы.Exists(ИдКонтр) = 0 Тогда", doc)
+
+    def test_general_controls_without_analytics(self) -> None:
+        # Четыре общих контроля - без разрезов покупателей/договоров/видов расчётов (№1 §23.4).
+        self.assertNotIn("ИспользоватьСубконто", self.general)
+        self.assertIn("БухИт.ВключатьСубсчета(-1);", self.general)
+        self.assertIn('БухИт.ВыполнитьЗапрос(НачКв, КонКв, "62") = 1', self.general)
+        controls = active(body(self.src, "КУДиР4_КонтролиКварталов"))
+        # Конец текущего квартала не запрашивается и не заменяется остатком на дату выгрузки.
+        self.assertIn("Если КонКв <= датакон Тогда", controls)
+        self.assertLess(controls.index('ЗакрДт = "";'), controls.index("ЗакрДт = \"\" + ДтК;"))
+        guard = controls.index("Если Полный = 1 Тогда\n\t\t\t\tЗакрДт")
+        self.assertLess(guard, controls.index("ЗакрДт = \"\" + ДтК;"))
+        self.assertIn('"COVERAGE_INCOMPLETE", "текущий неполный квартал', controls)
+        values = re.findall(r"сп\.ДобавитьЗначение\((.*)\);", controls)
+        self.assertEqual(len(values), len(chk5.QUARTERS_HEADER))
+        self.assertEqual(values[9:11], ['"REFRESHED"', "гл4ИдЗапуска"])
+
+    def test_headless_run_only_with_marker(self) -> None:
+        # Запуск без формы (харнесс 1С 7.7): только по списку-параметру с меткой; обычное открытие формы не меняется.
+        import run_1c_e05 as runner
+        opening = active(body(self.src, "ПриОткрытии"))
+        self.assertIn('Если ТипЗначенияСтр(Пар) = "СписокЗначений" Тогда', opening)
+        self.assertIn(f'Если ("" + Пар.ПолучитьЗначение(1)) = "{runner.MARKER}" Тогда', opening)
+        self.assertIn(f'Параметры77.ДобавитьЗначение("{runner.MARKER}");', runner.CONTROLLER)
+        headless = active(body(self.src, "КУДиР4_БезФормы"))
+        self.assertLess(headless.index("СтатусВозврата(0);"), headless.index("КУДиР4_НаборЭ05("))
+        version = re.match(r"// version: (\S+) ", self.src)[1]
+        self.assertIn(f'Пар.ДобавитьЗначение("loaded:{version}");', headless)
+        self.assertIn('Если ("" + Пар.ПолучитьЗначение(2)) = "e05" Тогда', headless)
+
+    def test_out_of_scope_accounts_not_summed(self) -> None:
+        for text in (self.day, self.before, self.general):
+            self.assertIn("Если СтрДлина(КУДиР4_СубсчетОбласти(Счет)) = 0 Тогда", text)
+            self.assertIn("КУДиР4_СчетВнеОбласти(", text)
+
 
 if __name__ == "__main__":
     unittest.main()
