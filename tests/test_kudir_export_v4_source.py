@@ -1,5 +1,5 @@
-"""Э0.2-Э0.3: инварианты исходника блока КУДиР4_ в 1cv77/kudir_export.txt (ТЗ №1 §§5-12.1, 18, 21-23, 27, 30;
-ТЗ №4 §§4-5, 7-8, 13).
+"""Э0.2-Э0.4: инварианты исходника блока КУДиР4_ в 1cv77/kudir_export.txt (ТЗ №1 §§5-18, 21-23, 27, 30;
+ТЗ №4 §§4-8, 13).
 
 1С 7.7 в CI нет: проверяется текст модуля. Компиляцию и запуск выполняет владелец в 1С.
 """
@@ -17,6 +17,7 @@ sys.path.insert(0, str(ROOT / "reports"))
 
 import check_e02 as chk  # noqa: E402
 import check_e03 as chk3  # noqa: E402
+import check_e04 as chk4  # noqa: E402
 
 
 def body(src: str, name: str) -> str:
@@ -48,6 +49,7 @@ class ExportV4SourceTests(unittest.TestCase):
         self.assertEqual(returned_literal(self.src, "КУДиР4_ЗаголовокДиаг").split(";"), chk.DIAG_HEADER)
         self.assertEqual(returned_literal(self.src, "КУДиР4_ЗаголовокДвижений").split(";"), chk3.LEDGER_HEADER)
         self.assertEqual(returned_literal(self.src, "КУДиР4_ЗаголовокСамопроверки").split(";"), chk.SELFTEST_HEADER)
+        self.assertEqual(returned_literal(self.src, "КУДиР4_ЗаголовокДокументов").split(";"), chk4.DOCUMENTS_HEADER)
 
     def test_source_has_no_overlong_physical_lines(self) -> None:
         self.assertEqual(chk.source_line_length_issues(self.src), [])
@@ -125,19 +127,26 @@ class ExportV4SourceTests(unittest.TestCase):
         self.assertLess(finish.index("КУДиР4_ЗакрытьДанные()"), finish.index("КУДиР4_ЗакрытьДиаг()"))
         self.assertLess(finish.index("КУДиР4_ЗакрытьДиаг()"), finish.index('КУДиР4_ЗаписатьСтатус("FAILED")'))
         self.assertIn("КУДиР4_ЗакрытьОстаток()", active(body(self.src, "КУДиР4_Сбросить")))
-        stages = active(body(self.src, "КУДиР4_ЭтапыЭ03"))
+        stages = active(body(self.src, "КУДиР4_ЭтапыЭ04"))
         self.assertEqual(stages.count("Попытка"), stages.count("КУДиР4_Фатально(ОписаниеОшибки())"))
         self.assertLess(stages.index("КУДиР4_ЗакрытьКарту()"), stages.index("КУДиР4_ПроверитьОбратимость()"))
         self.assertLess(stages.index("КУДиР4_ОбойтиПроводки(датанач, датакон, 1"), stages.index("КУДиР4_ОбойтиПроводки(датанач, датакон, 2"))
+        # Документы: первое чтение до закрытия общего id_map, повторное - после, до проверки обратимости.
+        self.assertLess(stages.index("КУДиР4_ОбойтиПроводки(датанач, датакон, 1"), stages.index("КУДиР4_ОбойтиДокументы(датанач, датакон, 1"))
+        self.assertLess(stages.index("КУДиР4_ОбойтиДокументы(датанач, датакон, 1"), stages.index("КУДиР4_ЗакрытьКарту()"))
+        self.assertLess(stages.index("КУДиР4_ЗакрытьКарту()"), stages.index("КУДиР4_ОбойтиДокументы(датанач, датакон, 2"))
+        self.assertLess(stages.index("КУДиР4_ОбойтиДокументы(датанач, датакон, 2"), stages.index("КУДиР4_ПроверитьОбратимость()"))
 
     def test_empty_window_is_incomplete_not_pass(self) -> None:
         # Без строк ledger62 итог INCOMPLETE; export_status остаётся WRITING. Число строк учитывается и при сбое
         # этапа (замечание журнала КП0.2: «итог: 0» при частично записанном файле).
-        stages = active(body(self.src, "КУДиР4_ЭтапыЭ03"))
+        stages = active(body(self.src, "КУДиР4_ЭтапыЭ04"))
         self.assertLess(stages.index("КонецПопытки;"), stages.index("гл4ЗаписейДвижений = гл4СтрокДанных;"))
+        self.assertIn("гл4ЗаписейДокументов = гл4СтрокДанных;", stages)
         finish = active(body(self.src, "КУДиР4_Завершить"))
         self.assertIn("Если гл4ЗаписейДвижений = 0 Тогда", finish)
-        self.assertEqual(finish.count('ИтогНабора = "INCOMPLETE";'), 1)
+        self.assertIn("Если гл4ЗаписейДокументов = 0 Тогда", finish)
+        self.assertEqual(finish.count('ИтогНабора = "INCOMPLETE";'), 2)
         self.assertLess(finish.index('ИтогНабора = "FAIL";'), finish.index('ИтогНабора = "INCOMPLETE";'))
         self.assertIn("гл4ЗаписейДвижений = 0;", active(body(self.src, "КУДиР4_Сбросить")))
 
@@ -159,8 +168,8 @@ class ExportV4SourceTests(unittest.TestCase):
     def test_legacy_v2_button_disabled(self) -> None:
         legacy = active(body(self.src, "Сформировать"))
         self.assertNotIn("КУДиР_Выполнить", legacy)
-        self.assertIn("КУДиР4_НаборЭ03(выбДатаНач, выбДатаКонец)", active(body(self.src, "ВыгрузкаЭ03")))
-        self.assertIn("«Набор Э0.3»", legacy)
+        self.assertIn("КУДиР4_НаборЭ04(выбДатаНач, выбДатаКонец)", active(body(self.src, "ВыгрузкаЭ04")))
+        self.assertIn("«Набор Э0.4»", legacy)
 
 
 class ExportLedgerSourceTests(unittest.TestCase):
@@ -175,7 +184,17 @@ class ExportLedgerSourceTests(unittest.TestCase):
 
     def test_version_line_matches_start_line(self) -> None:
         version = re.match(r"// version: (\S+) ", self.src)[1]
-        self.assertIn(f'"START Э0.3 version={version} run_id="', active(body(self.src, "КУДиР4_НачатьЗапуск")))
+        self.assertIn(f'"START Э0.4 version={version} run_id="', active(body(self.src, "КУДиР4_НачатьЗапуск")))
+
+    def test_run_labels_match_checker(self) -> None:
+        # Ревью -04: журнал писал END Э0.3, а check_e04 ищет END Э0.4 - успешный набор считался прерванным (FAIL).
+        start = re.findall(r'"START (\S+) version=', active(body(self.src, "КУДиР4_НачатьЗапуск")))
+        end = re.findall(r'"END (\S+) итог=', active(body(self.src, "КУДиР4_Завершить")))
+        self.assertEqual(start, [chk4.LABEL])
+        self.assertEqual(end, [chk4.LABEL])
+        # Ни одна строка запуска набора не называет прежний этап (комментарии не в счёт).
+        literals = re.findall(r'"[^"\n]*"', self.v4)
+        self.assertEqual([s for s in literals if "Э0.3" in s], [])
 
     def test_row_has_all_contract_fields_in_order(self) -> None:
         # 37 значений СписокЗначений в порядке заголовка №1 §12; последние - поля оплаты.
@@ -282,6 +301,130 @@ class ExportLedgerSourceTests(unittest.TestCase):
         self.assertLess(walk.index('КУДиР4_СторонаДвижения(Опер, "D"'), walk.index('КУДиР4_СторонаДвижения(Опер, "K"'))
         self.assertLess(walk.index("КонецЦикла;"), walk.index("КУДиР4_ЗавершитьДокумент();"))
 
+
+class ExportDocumentsSourceTests(unittest.TestCase):
+    """Э0.4: documents.csv по №1 §§13-17, 15.1 в исходнике КУДиР4_."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.src = EXPORT.read_text(encoding="utf-8-sig")
+        cls.doc = active(body(cls.src, "КУДиР4_ДокументКандидат"))
+        cls.walk = active(body(cls.src, "КУДиР4_ОбойтиДокументы"))
+        cls.vat = active(body(cls.src, "КУДиР4_СоставНДС"))
+
+    def test_candidates_are_the_confirmed_kinds(self) -> None:
+        # №1 §14: только три вида; иные источники движений кандидатами не становятся.
+        kinds = active(body(self.src, "КУДиР4_ТипДокумента"))
+        self.assertEqual(re.findall(r'Врег\("(\w+)"\)', kinds), ["Счет", "РасходнаяНакладная", "ОказаниеУслуг"])
+        self.assertEqual(re.findall(r'Возврат "(\w*)";', kinds), ["INVOICE", "GOODS_SHIPMENT", "SERVICE_ACT", ""])
+        self.assertIn('Роль = "INVOICE";', self.doc)
+        self.assertIn('Роль = "RECEIVABLE";', self.doc)
+
+    def test_one_walk_in_time_order_with_current_document(self) -> None:
+        # Один обход всех документов окна по шкале времени 1С (№1 §22); K - ТекущийДокумент() (КП0.1), без накопления.
+        self.assertIn('ДокОбъект = СоздатьОбъект("Документ");', self.walk)
+        self.assertIn("ДокОбъект.ВыбратьДокументы(датанач, датакон);", self.walk)
+        self.assertIn("Ссылка = ДокОбъект.ТекущийДокумент();", self.walk)
+        self.assertNotIn("ТаблицаЗначений", self.walk + self.doc)
+        self.assertIn("Сист = ЗначениеВСтрокуВнутр(Ссылка);", self.doc)
+        self.assertIn("Поз = КУДиР_ПозицияДокТочная(Ссылка);", self.doc)
+
+    def test_typed_object_is_checked_to_stand_on_the_same_document(self) -> None:
+        # Реквизиты не берутся у другого (первого) документа вида: ссылка типизированного объекта сверяется с K.
+        self.assertIn("ДокТип.НайтиДокумент(Ссылка) = 1", self.doc)
+        self.assertIn("КУДиР_СтрокиРавны(ЗначениеВСтрокуВнутр(ДокТип.ТекущийДокумент()), Сист) = 1", self.doc)
+        self.assertLess(self.doc.index("Встал = 1;"), self.doc.index("Если Встал = 1 Тогда"))
+
+    def test_row_has_all_contract_fields_in_order(self) -> None:
+        values = re.findall(r"сп\.ДобавитьЗначение\((.*)\);", self.doc)
+        self.assertEqual(len(values), len(chk4.DOCUMENTS_HEADER))
+        self.assertEqual(values[:4], ["ИдДок", "Роль", "ТипДок", "ВидДок"])
+        self.assertEqual(values[15:21], ["СуммаКоп", "Обл", "Необл", "НДС", "Пров", "Пом"])
+        self.assertEqual(values[21:], ["КУДиР4_КомментарийДок(Ссылка)", '""', "СтатусНДС"])
+
+    def test_vat_unknown_is_empty_not_zero(self) -> None:
+        # №1 §15.1: UNKNOWN - три пустых агрегата и VAT_COMPOSITION_UNKNOWN; KNOWN - только при согласии агрегатов с
+        # суммой документа (пустая табличная часть при ненулевой сумме - частный случай расхождения).
+        unknown = self.doc[self.doc.index('Если СтатусНДС <> "KNOWN" Тогда'):]
+        self.assertIn('Обл = "";', unknown)
+        self.assertIn('НДС = "";', unknown)
+        self.assertIn('"VAT_COMPOSITION_UNKNOWN"', unknown)
+        self.assertNotRegex(self.doc + self.vat, r'(Обл|Необл|НДС) = "0"')
+        for check in ("Если Отриц > 0 Тогда", "Если Несогл > 0 Тогда"):
+            self.assertLess(self.vat.index(check), self.vat.index('Возврат "KNOWN";'))
+        known = self.doc[self.doc.index('Если СтатусНДС = "KNOWN" Тогда'):]
+        self.assertIn("Число(Обл) + Число(Необл) <> Число(СуммаКоп)", known)
+        self.assertLess(self.doc.index('ДокТип.Итог("Всего")'), self.doc.index('Если СтатусНДС = "KNOWN" Тогда'))
+
+    def test_vat_in_one_pass_with_gross_column(self) -> None:
+        # Запуск KUDIR4_20261011_003: в четырёх актах НДС «сверху» (Дт 62 Кт 90 = Сумма + НДС), бухгалтер подтвердил, что
+        # так и должно быть. Сумма строки к оплате - Всего; строка проверяется: Всего равно Сумма или Сумма + НДС.
+        # Налога с продаж в базе нет: колонка НП не читается.
+        self.assertEqual(self.vat.count("ДокТип.ВыбратьСтроки();"), 1)
+        self.assertIn("КопВсего = КУДиР_Копейки(ЗнВсего);", self.vat)
+        self.assertIn("(КопВсего <> КопСтр) И (КопВсего <> КопСтр + КопНДС)", self.vat)
+        self.assertIn("ВОбл = ВОбл + КопВсего;", self.vat)
+        self.assertIn("ВНеобл = ВНеобл + КопВсего;", self.vat)
+        self.assertIn('ТипЗначенияСтр(ЗнНДС) <> "Число"', self.vat)
+        self.assertNotRegex(self.vat, r"/\s*105|\*\s*5\b")
+        self.assertNotIn(".НП", self.vat)
+        columns = active(body(self.src, "КУДиР4_КолонкиВида"))
+        self.assertEqual(re.findall(r'Нужные\.ДобавитьЗначение\("(\w+)"', columns), ["Сумма", "НДС", "Всего"])
+        # Документы с НДС «сверху» перечисляются в журнале для сверки КП0.4 (их разбирает check_e04 sheet).
+        self.assertIn('КУДиР_Лог("' + chk4.VAT_ON_TOP_LOG + '" + Описание', self.doc)
+
+    def test_document_amount_from_gross_total_or_rows(self) -> None:
+        # У счёта колонка Сумма без итога («Реквизит не имеет итога по колонке!»); если и итог Всего не читается -
+        # сумма Всего по прочитанным строкам.
+        self.assertNotIn('Итог("Сумма")', self.doc)
+        self.assertIn('СуммаКоп = "" + КУДиР_Копейки(ДокТип.Итог("Всего"));', self.doc)
+        self.assertIn("СуммаКоп = ВсегоСтрок;", self.doc)
+        self.assertIn('Всего = "" + ВВсего;', self.vat)
+
+    def test_settlement_kind_from_attribute_then_postings(self) -> None:
+        # Реквизит исполнения - ВыбВидыРасчетовСПокупателями (имени ВидыРасчетовСПокупателями в конфигурации нет,
+        # запуск KUDIR4_20261011_003). Пустой у проведённого - вид по проводкам 62.1 (№1 §15); у счёта не читается.
+        guard = self.doc.index('Если Роль = "RECEIVABLE" Тогда')
+        self.assertLess(guard, self.doc.index("КУДиР4_ВидРасчетовКандидата("))
+        kind = active(body(self.src, "КУДиР4_ВидРасчетовКандидата"))
+        self.assertNotIn(".ВидыРасчетовСПокупателями", kind)
+        self.assertIn("ВидР = ДокТип.ВыбВидыРасчетовСПокупателями;", kind)
+        self.assertIn('КУДиР4_ОшибкаВида(ВидДок, "ВидРасчетовID", ИдДок, "READ_ERROR"', kind)
+        read = kind.index("ВидР = ДокТип.ВыбВидыРасчетовСПокупателями;")
+        empty = kind.index("Если ПустоеЗначение(ВидР) = 1 Тогда")
+        posted = kind.index('Если Пров = "1" Тогда')
+        self.assertLess(read, empty)
+        self.assertLess(empty, posted)
+        self.assertLess(posted, kind.index("КУДиР4_ВидРасчетовПроводок("))
+        search = active(body(self.src, "КУДиР4_ВидРасчетовПроводок"))
+        self.assertIn("Опер.ВыбратьПроводки();", search)
+        self.assertIn("Пока Опер.ПолучитьПроводку() = 1 Цикл", search)
+        self.assertIn('= "62.1" Тогда', search)
+        self.assertIn('ВидР = "";', search[search.index("Если Разных <> 1 Тогда"):])
+
+    def test_unreadable_attributes_are_errors_not_zeros(self) -> None:
+        self.assertIn('СуммаКоп = "";', self.doc)
+        self.assertIn('"СуммаКоп", ИдДок, "READ_ERROR"', self.doc)
+        columns = active(body(self.src, "КУДиР4_КолонкиВида"))
+        self.assertIn("ДокТип.ВыгрузитьТабличнуюЧасть(таб);", columns)
+        self.assertIn('"READ_ERROR"', columns)
+        self.assertNotIn("Метаданные.", columns)
+
+    def test_documents_registered_in_id_map_and_ordered(self) -> None:
+        register = active(body(self.src, "КУДиР4_ЗарегистрироватьКандидата"))
+        self.assertIn('КУДиР4_ЗапомнитьИд("DOCUMENT", ИдДок, Сист, ВидДок, НомДок, ДатаДок, Поз, "");', register)
+        self.assertIn("КУДиР4_ЗапомнитьПозицию(Ключ, Поз, ИдДок);", register)
+        self.assertIn('"ORDER_UNKNOWN"', register)
+        self.assertIn('"ID_COLLISION"', register)
+
+    def test_contract_id_by_owner(self) -> None:
+        # Код договора уникален у владельца: ID по владельцу, чужой договор документа - ANALYTICS_UNKNOWN.
+        analytics = active(body(self.src, "КУДиР4_АналитикаКандидата"))
+        self.assertIn('КУДиР4_ЗапомнитьИд("CONTRACT", ИдДог, ЗначениеВСтрокуВнутр(Дог)', analytics)
+        self.assertIn("ИдВладельца = КУДиР_ИдКонтрагента(Дог.Владелец);", analytics)
+        self.assertIn('ИдДог = "D|" + ИдВладельца + "|" + СокрЛП(Дог.Код);', analytics)
+        self.assertIn("КУДиР_СтрокиРавны(ИдВладельца, ИдКонтр) = 0", analytics)
+        self.assertIn('"ANALYTICS_UNKNOWN", "договор документа "', analytics)
 
 if __name__ == "__main__":
     unittest.main()
