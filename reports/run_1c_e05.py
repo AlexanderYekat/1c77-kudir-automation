@@ -2,6 +2,10 @@
 
     python reports/run_1c_e05.py --output <fresh ASCII dir> [--command check|e05] [--start 2026-01-01 --end 2026-01-31]
 
+Since module 2026.10.13-01 (E0.6) the ERT has no "e05" command: use --command check here and reports/run_1c_full.py for
+the FULL export. "e05" stays for the E0.5 ERT copies (kudir_export.ert.e05-03.bak). This file also holds the guarded
+session shared by run_1c_full.py and run_1c_sheet.py.
+
 harness77 (C:\\MyProjects\\harness77, research/platform77) owns the guarded session: the 1C OLE server under x86 CDB on
 a private desktop, ownership of the own process verified before Initialize (other 1C sessions stay untouched), the
 coordinated shutdown without AV, the pinned base-for-test and binaries. This script adds only the KUDiR client: a 1C++
