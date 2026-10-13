@@ -1,5 +1,5 @@
-"""Э0.2-Э0.5: инварианты исходника блока КУДиР4_ в 1cv77/kudir_export.txt (ТЗ №1 §§5-18, 21-23.4, 27, 30;
-ТЗ №4 §§4-9, 13, 19).
+"""Э0.2-Э0.6: инварианты исходника блока КУДиР4_ в 1cv77/kudir_export.txt (ТЗ №1 §§5-18, 21-23.4, 27, 30;
+ТЗ №4 §§4-13, 15, 19).
 
 1С 7.7 в CI нет: проверяется текст модуля. Компиляцию и запуск выполняет владелец в 1С.
 """
@@ -19,6 +19,7 @@ import check_e02 as chk  # noqa: E402
 import check_e03 as chk3  # noqa: E402
 import check_e04 as chk4  # noqa: E402
 import check_e05 as chk5  # noqa: E402
+import check_e06 as chk6  # noqa: E402
 
 
 def body(src: str, name: str) -> str:
@@ -58,19 +59,44 @@ class ExportV4SourceTests(unittest.TestCase):
         self.assertEqual(chk.source_line_length_issues(self.src), [])
 
     def test_manifest_keys_in_contract_order(self) -> None:
-        keys = re.findall(r'TS\.WriteLine\("(\w+);', body(self.src, "КУДиР4_ЗаписатьМанифест"))
-        self.assertEqual(keys, ["key", *chk.MANIFEST_KEYS])
-        manifest = body(self.src, "КУДиР4_ЗаписатьМанифест")
+        manifest = active(body(self.src, "КУДиР4_ЗаписатьМанифест"))
+        pairs = re.findall(r'КУДиР4_ДобавитьПару\(Ключи, Значения, "(\w+)", ([^;]*)\);', manifest)
+        self.assertEqual([key for key, _ in pairs], chk.MANIFEST_KEYS)
+        values = dict(pairs)
         for key, value in chk.MANIFEST_FIXED.items():
-            self.assertIn(f'"{key};{value}"', manifest)
+            if key != "coverage_status":
+                self.assertEqual(values[key], f'"{value}"')
+        # coverage_status - параметр: INCOMPLETE при записи и после сбоя, COMPLETE только перед публикацией (Э0.6).
+        self.assertEqual(values["coverage_status"], "Охват")
 
-    def test_status_writing_first_and_never_complete(self) -> None:
+    def test_status_writing_first_complete_last(self) -> None:
         start = active(body(self.src, "КУДиР4_НачатьЗапуск"))
-        self.assertLess(start.index('КУДиР4_ЗаписатьСтатус("WRITING")'), start.index("КУДиР4_ЗаписатьМанифест"))
         self.assertLess(start.index("КУДиР4_СоздатьКаталогЗапуска"), start.index('КУДиР4_ЗаписатьСтатус("WRITING")'))
-        self.assertNotRegex(self.v4, r'ЗаписатьСтатус\("COMPLETE"\)')
+        self.assertLess(start.index('КУДиР4_ЗаписатьСтатус("WRITING")'), start.index('КУДиР4_ЗаписатьМанифест(датакон, "INCOMPLETE")'))
         status = active(body(self.src, "КУДиР4_ЗаписатьСтатус"))
-        self.assertEqual(re.findall(r'WriteLine\("(\w+);', status), ["key", *chk.STATUS_KEYS])
+        self.assertEqual(re.findall(r'ДобавитьПару\(Ключи, Значения, "(\w+)"', status), chk.STATUS_KEYS)
+        # COMPLETE - один раз, последним: после проверки пакета, manifest COMPLETE, закрытия diagnostics.csv и его
+        # проверки (№1 §23.2, №4 §13). FAILED - после всех этих шагов, если хоть один не прошёл.
+        self.assertEqual(len(re.findall(r'ЗаписатьСтатус\("COMPLETE"\)', self.v4)), 1)
+        finish = active(body(self.src, "КУДиР4_Завершить"))
+        order = ["КУДиР4_ПроверитьПакет(датакон)", 'КУДиР4_ЗаписатьМанифест(датакон, "COMPLETE")', "КУДиР4_ЗакрытьДиаг()",
+                 "КУДиР4_ПроверитьДиагностику()", 'КУДиР4_ЗаписатьСтатус("COMPLETE")', 'КУДиР4_ЗаписатьСтатус("FAILED")']
+        positions = [finish.index(step) for step in order]
+        self.assertEqual(positions, sorted(positions))
+        self.assertEqual(finish.count("Если КУДиР4_БезОшибок() = 1 Тогда"), 4)
+        # Неопубликованный каталог не объявляет охват: manifest возвращается к INCOMPLETE.
+        self.assertLess(finish.index('Если Статус <> "COMPLETE" Тогда'), finish.index('КУДиР4_ЗаписатьМанифест(датакон, "INCOMPLETE")'))
+
+    def test_key_value_files_replaced_only_after_verification(self) -> None:
+        # Читатель видит прежний полный файл, отсутствие файла или новый полный, но не частичную запись (№4 §13).
+        keys = active(body(self.src, "КУДиР4_ЗаписатьКлючи"))
+        order = ["CreateTextFile(ПутьВрем, 0, 0)", "КУДиР4_ОткрытьЧтение(ИмяВрем,", "КУДиР4_СверитьЗапись(сп, TS, ИмяФайла",
+                 "КУДиР4_ПроверитьКонецФайла(TS, ИмяФайла)", "Если гл4Ошибок > ОшибокДо Тогда", "FSO.DeleteFile(Путь);", "FSO.MoveFile(ПутьВрем, Путь);"]
+        positions = [keys.index(step) for step in order]
+        self.assertEqual(positions, sorted(positions))
+        self.assertNotIn("CreateTextFile(Путь,", keys)
+        for name in ("КУДиР4_ЗаписатьСтатус", "КУДиР4_ЗаписатьМанифест"):
+            self.assertNotIn("CreateTextFile", active(body(self.src, name)))
 
     def test_new_run_directory_never_overwrites(self) -> None:
         make = active(body(self.src, "КУДиР4_СоздатьКаталогЗапуска"))
@@ -130,7 +156,7 @@ class ExportV4SourceTests(unittest.TestCase):
         self.assertLess(finish.index("КУДиР4_ЗакрытьДанные()"), finish.index("КУДиР4_ЗакрытьДиаг()"))
         self.assertLess(finish.index("КУДиР4_ЗакрытьДиаг()"), finish.index('КУДиР4_ЗаписатьСтатус("FAILED")'))
         self.assertIn("КУДиР4_ЗакрытьОстаток()", active(body(self.src, "КУДиР4_Сбросить")))
-        stages = active(body(self.src, "КУДиР4_ЭтапыЭ05"))
+        stages = active(body(self.src, "КУДиР4_ЭтапыВыгрузки"))
         self.assertEqual(stages.count("Попытка"), stages.count("КУДиР4_Фатально(ОписаниеОшибки())"))
         self.assertLess(stages.index("КУДиР4_ЗакрытьКарту()"), stages.index("КУДиР4_ПроверитьОбратимость()"))
         self.assertLess(stages.index("КУДиР4_ОбойтиПроводки(датанач, датакон, 1"), stages.index("КУДиР4_ОбойтиПроводки(датанач, датакон, 2"))
@@ -146,18 +172,20 @@ class ExportV4SourceTests(unittest.TestCase):
         self.assertLess(stages.index("КУДиР4_СнимкиПередДокументами();"), stages.index("КУДиР4_КонтролиКварталов(датакон);"))
         self.assertLess(stages.index("КУДиР4_КонтролиКварталов(датакон);"), stages.index("КУДиР4_ЗакрытьКарту()"))
 
-    def test_empty_window_is_incomplete_not_pass(self) -> None:
-        # Без строк ledger62 итог INCOMPLETE; export_status остаётся WRITING. Число строк учитывается и при сбое
-        # этапа (замечание журнала КП0.2: «итог: 0» при частично записанном файле).
-        stages = active(body(self.src, "КУДиР4_ЭтапыЭ05"))
+    def test_result_is_export_status(self) -> None:
+        # Э0.6: итог запуска - export_status (COMPLETE/FAILED/WRITING); итога INCOMPLETE диагностических наборов нет:
+        # пакет без движений при доказанной полноте допустим (№1 §4). Число строк учитывается и при сбое этапа
+        # (замечание журнала КП0.2: «итог: 0» при частично записанном файле).
+        stages = active(body(self.src, "КУДиР4_ЭтапыВыгрузки"))
         self.assertLess(stages.index("КонецПопытки;"), stages.index("гл4ЗаписейДвижений = гл4СтрокДанных;"))
         self.assertIn("гл4ЗаписейДокументов = гл4СтрокДанных;", stages)
         finish = active(body(self.src, "КУДиР4_Завершить"))
-        self.assertIn("Если гл4ЗаписейДвижений = 0 Тогда", finish)
-        self.assertIn("Если гл4ЗаписейДокументов = 0 Тогда", finish)
-        self.assertEqual(finish.count('ИтогНабора = "INCOMPLETE";'), 3)
-        self.assertIn("Если гл4СнДокументов = 0 Тогда", finish)
-        self.assertLess(finish.index('ИтогНабора = "FAIL";'), finish.index('ИтогНабора = "INCOMPLETE";'))
+        self.assertNotIn("ИтогНабора", finish)
+        self.assertIn('"END Э0.6 итог=" + Статус + " run_id="', finish)
+        self.assertIn("гл4ИтогЗапуска = Статус;", finish)
+        # Об успехе сообщается только после опубликованного COMPLETE (№4 §10).
+        self.assertLess(finish.index('КУДиР4_ЗаписатьСтатус("COMPLETE")'), finish.index("выгрузка FULL опубликована"))
+        self.assertLess(finish.index('Если Статус = "COMPLETE" Тогда'), finish.index("выгрузка FULL опубликована"))
         self.assertIn("гл4ЗаписейДвижений = 0;", active(body(self.src, "КУДиР4_Сбросить")))
 
     def test_v4_does_not_query_metadata(self) -> None:
@@ -178,8 +206,8 @@ class ExportV4SourceTests(unittest.TestCase):
     def test_legacy_v2_button_disabled(self) -> None:
         legacy = active(body(self.src, "Сформировать"))
         self.assertNotIn("КУДиР_Выполнить", legacy)
-        self.assertIn("КУДиР4_НаборЭ05(выбДатаНач, выбДатаКонец)", active(body(self.src, "ВыгрузкаЭ05")))
-        self.assertIn("«Набор Э0.5»", legacy)
+        self.assertIn("КУДиР4_ПолнаяВыгрузка(выбДатаНач, выбДатаКонец)", active(body(self.src, "ВыгрузкаПолная")))
+        self.assertIn("«Выгрузка»", legacy)
 
 
 class ExportLedgerSourceTests(unittest.TestCase):
@@ -194,18 +222,18 @@ class ExportLedgerSourceTests(unittest.TestCase):
 
     def test_version_line_matches_start_line(self) -> None:
         version = re.match(r"// version: (\S+) ", self.src)[1]
-        self.assertIn(f'"START Э0.5 version={version} run_id="', active(body(self.src, "КУДиР4_НачатьЗапуск")))
+        self.assertIn(f'"START Э0.6 version={version} run_id="', active(body(self.src, "КУДиР4_НачатьЗапуск")))
 
     def test_run_labels_match_checker(self) -> None:
         # Ревью -04: журнал писал END Э0.3, а check_e04 ищет END Э0.4 - успешный набор считался прерванным (FAIL).
-        # С Э0.5 метки запуска - Э0.5, их ищет check_e05.
+        # С Э0.6 метки запуска - Э0.6, их ищет check_e06.
         start = re.findall(r'"START (\S+) version=', active(body(self.src, "КУДиР4_НачатьЗапуск")))
         end = re.findall(r'"END (\S+) итог=', active(body(self.src, "КУДиР4_Завершить")))
-        self.assertEqual(start, [chk5.LABEL])
-        self.assertEqual(end, [chk5.LABEL])
-        # Ни одна строка запуска набора не называет прежний этап (комментарии не в счёт).
+        self.assertEqual(start, [chk6.LABEL])
+        self.assertEqual(end, [chk6.LABEL])
+        # Ни одна строка запуска не называет прежний этап (комментарии не в счёт).
         literals = re.findall(r'"[^"\n]*"', self.v4)
-        self.assertEqual([s for s in literals if "Э0.3" in s or "Э0.4" in s], [])
+        self.assertEqual([s for s in literals if "Э0.3" in s or "Э0.4" in s or "Э0.5" in s], [])
 
     def test_row_has_all_contract_fields_in_order(self) -> None:
         # 37 значений СписокЗначений в порядке заголовка №1 §12; последние - поля оплаты.
@@ -382,7 +410,7 @@ class ExportDocumentsSourceTests(unittest.TestCase):
         columns = active(body(self.src, "КУДиР4_КолонкиВида"))
         self.assertEqual(re.findall(r'Нужные\.ДобавитьЗначение\("(\w+)"', columns), ["Сумма", "НДС", "Всего"])
         # Документы с НДС «сверху» перечисляются в журнале для сверки КП0.4 (их разбирает check_e04 sheet).
-        self.assertIn('КУДиР_Лог("' + chk5.VAT_ON_TOP_LOG + '" + Описание', self.doc)
+        self.assertIn('КУДиР_Лог("' + chk6.VAT_ON_TOP_LOG + '" + Описание', self.doc)
 
     def test_document_amount_from_gross_total_or_rows(self) -> None:
         # У счёта колонка Сумма без итога («Реквизит не имеет итога по колонке!»); если и итог Всего не читается -
@@ -586,15 +614,91 @@ class ExportSnapshotsSourceTests(unittest.TestCase):
         self.assertIn(f'Если ("" + Пар.ПолучитьЗначение(1)) = "{runner.MARKER}" Тогда', opening)
         self.assertIn(f'Параметры77.ДобавитьЗначение("{runner.MARKER}");', runner.CONTROLLER)
         headless = active(body(self.src, "КУДиР4_БезФормы"))
-        self.assertLess(headless.index("СтатусВозврата(0);"), headless.index("КУДиР4_НаборЭ05("))
+        self.assertLess(headless.index("СтатусВозврата(0);"), headless.index("КУДиР4_ПолнаяВыгрузка("))
         version = re.match(r"// version: (\S+) ", self.src)[1]
         self.assertIn(f'Пар.ДобавитьЗначение("loaded:{version}");', headless)
-        self.assertIn('Если ("" + Пар.ПолучитьЗначение(2)) = "e05" Тогда', headless)
+        self.assertIn('Если Лев(Команда, 4) <> "full" Тогда', headless)
+        self.assertLess(headless.index("КУДиР4_ПолнаяВыгрузка("), headless.index('Пар.ДобавитьЗначение("catalog:" + гл4Каталог);'))
+        self.assertIn('Пар.ДобавитьЗначение("status:" + гл4ИтогЗапуска);', headless)
+        # После серии сбой формы сброшен: следующая выгрузка из формы читает только exchange\\kudir_test_fail.txt.
+        self.assertTrue(headless.rstrip().endswith('гл4СбойЗадан = "";'))
 
     def test_out_of_scope_accounts_not_summed(self) -> None:
         for text in (self.day, self.before, self.general):
             self.assertIn("Если СтрДлина(КУДиР4_СубсчетОбласти(Счет)) = 0 Тогда", text)
             self.assertIn("КУДиР4_СчетВнеОбласти(", text)
+
+
+class ExportFullSourceTests(unittest.TestCase):
+    """Э0.6: проверка пакета перед публикацией, контролируемые сбои и замер памяти (№1 §§23.2-23.4, 28; №4 §§10-15)."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.src = EXPORT.read_text(encoding="utf-8-sig")
+        cls.finish = active(body(cls.src, "КУДиР4_Завершить"))
+        cls.check = active(body(cls.src, "КУДиР4_ПроверитьПакет"))
+
+    def test_fault_targets_match_runner_steps(self) -> None:
+        import run_1c_full
+        targets = active(body(self.src, "КУДиР4_ЦельСбоя"))
+        self.assertEqual(re.findall(r'Шаг = "(\w+)" Тогда', targets), list(run_1c_full.STEPS))
+        start = active(body(self.src, "КУДиР4_НачатьЗапуск"))
+        # Запуск без формы задаёт сбой сам, файл exchange\kudir_test_fail.txt читается только без этого.
+        self.assertLess(start.index("Если СтрДлина(гл4СбойЗадан) > 0 Тогда"), start.index("КУДиР4_ПрочитатьИмитацию()"))
+        self.assertIn('Если гл4СбойФайл = "-" Тогда', start)
+
+    def test_fault_fires_after_the_written_record(self) -> None:
+        # Сбой срабатывает и у файла из одной записи: ledger_quarters.csv окна в один квартал (серия h77-e06-series-01).
+        for name, write, count in (("КУДиР4_ПисатьДанные", "гл4ПотокДанных.WriteLine(ТекстСтроки);", "КУДиР4_ПроверитьИмитацию(гл4ИмяДанных, гл4СтрокДанных);"),
+                                   ("КУДиР4_ПисатьКарту", "гл4ПотокКарты.WriteLine(ТекстСтроки);", 'КУДиР4_ПроверитьИмитацию("id_map.csv", гл4СтрокКарты);')):
+            text = active(body(self.src, name))
+            self.assertLess(text.index(write), text.index(count))
+
+    def test_publication_faults_sit_between_their_steps(self) -> None:
+        # PRECHECK портит закрытый файл до проверки пакета; PUBLISH - после manifest COMPLETE, до закрытия diagnostics.
+        self.assertLess(self.finish.index('КУДиР_СтрокиРавны(гл4СбойФайл, "PRECHECK") = 1'), self.finish.index("КУДиР4_ПроверитьПакет(датакон)"))
+        publish = self.finish.index('КУДиР4_ПроверитьИмитацию("PUBLISH", 1);')
+        self.assertLess(self.finish.index('КУДиР4_ЗаписатьМанифест(датакон, "COMPLETE")'), publish)
+        self.assertLess(publish, self.finish.index("КУДиР4_ЗакрытьДиаг()"))
+        spoil = active(body(self.src, "КУДиР4_ИспортитьКварталы"))
+        self.assertIn('FSO.OpenTextFile(гл4Каталог + "\\ledger_quarters.csv", 8, 0)', spoil)
+        self.assertIn('гл4СбойФайл = "";', spoil)
+
+    def test_package_check_reads_every_table(self) -> None:
+        for name in ("КУДиР4_ПроверитьДвиженияПакета", "КУДиР4_ПроверитьДокументыПакета", "КУДиР4_ПроверитьСнимкиПакета", "КУДиР4_ПроверитьКварталыПакета"):
+            self.assertIn(name + "(", self.check)
+            text = active(body(self.src, name))
+            self.assertIn("КУДиР4_ОткрытьЧтение(Файл,", text)
+            self.assertIn("КУДиР4_ЧислоЗаписейПакета(Файл, Записей, гл4Записей", text)
+            self.assertIn("TS.Close();", text)
+        # Ссылки разрешаются по индексу, равному записанному id_map; разница - записи id_map без ссылок.
+        self.assertIn("Лишних = гл4Ссылки.Count - Использованы.Count;", self.check)
+        reference = active(body(self.src, "КУДиР4_СсылкаПакета"))
+        self.assertIn("гл4Ссылки.Exists(КлючКарты) = 0", reference)
+        self.assertIn('"ID_COLLISION", "повтор ключа записи"', active(body(self.src, "КУДиР4_КлючПакета")))
+        reversibility = active(body(self.src, "КУДиР4_ПроверитьОбратимость"))
+        self.assertLess(reversibility.index("Прочитаны.Exists("), reversibility.index("КУДиР4_ПроверитьЗаписьКарты(сп);"))
+        quarters = active(body(self.src, "КУДиР4_ПроверитьКварталыПакета"))
+        for field, expected in (("ledger_action", '"REFRESHED"'), ("ledger_source_run_id", "гл4ИдЗапуска"),
+                                ("ledger_row_count", '"" + гл4Кварталы.ПолучитьЗначение(Записей, "СтрокФайла")')):
+            self.assertIn(f'КУДиР4_ПолеКвартала(сп, Заг, "{field}", {expected}, КлючЗап);', quarters)
+        diagnostics = active(body(self.src, "КУДиР4_ПроверитьДиагностику"))
+        self.assertIn('Если Уровень = "ERROR" Тогда', diagnostics)
+        self.assertIn("КУДиР4_ЧислоЗаписейПакета(Файл, Записей, гл4СтрокДиаг);", diagnostics)
+
+    def test_memory_is_logged_and_never_fails_the_run(self) -> None:
+        memory = active(body(self.src, "КУДиР4_Память"))
+        self.assertTrue(memory.split("\n", 1)[1].lstrip().startswith("Попытка"))
+        self.assertNotIn("КУДиР4_Ошибка", memory)
+        self.assertNotIn("КУДиР4_Предупреждение", memory)
+        self.assertIn("Реб.Terminate();", memory)
+        fields = re.findall(r'(\w+)=" \+', memory)
+        self.assertEqual(fields, ["pid", *chk6.MEMORY_FIELDS])
+        # Одинаковые точки в каждом запуске: старт, этапы, перед и после освобождения структур (№4 §15).
+        self.assertIn('КУДиР4_Память("старт");', active(body(self.src, "КУДиР4_НачатьЗапуск")))
+        stages = active(body(self.src, "КУДиР4_ЭтапыВыгрузки"))
+        self.assertEqual(stages.count("КУДиР4_Память(гл4Этап);"), 7)
+        self.assertLess(self.finish.index('КУДиР4_Память("перед освобождением");'), self.finish.index("КУДиР4_Освободить();\n\tКУДиР4_Память(\"после освобождения\");"))
 
 
 if __name__ == "__main__":
