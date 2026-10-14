@@ -253,9 +253,18 @@ def check_snapshots(rows: list[dict], ledger: list[dict], documents: list[dict],
         findings.error("SNAPSHOT_UNKNOWN", SNAPSHOTS_FILE, "PACKAGE",
                        f"неизвестных обязательных снимков {unknown_required}: строки сохранены для разбора причины, приёмку полноты снимков набор не проходит (№1 §27)")
 
-    # DAY_START: every quarter start of the coverage, once; the same required key set at every boundary.
+    required: dict[tuple[str, str], str] = {}
+    for name, source in ((LEDGER_FILE, ledger), (DOCUMENTS_FILE, documents)):
+        for row in source:
+            if row["КонтрагентID"]:
+                required.setdefault((row["КонтрагентID"], row["ДоговорID"]), name)
+    # DAY_START: every quarter start of the coverage, once; the same required key set at every boundary. An empty area -
+    # no snapshot at all and no customer in ledger62 or documents - has no row to write at any boundary (№1 §4); its
+    # zero general openings are then reconciled by check_quarters.
     expected_days = quarter_starts(horizon) if horizon else []
-    if sorted(day) != expected_days:
+    if not rows and not required:
+        findings.info("EMPTY_AREA", SNAPSHOTS_FILE, "PACKAGE", "в области нет покупателей: DAY_START не пишется, нулевые остатки сверяются с ledger_quarters")
+    elif sorted(day) != expected_days:
         findings.error("COVERAGE_INCOMPLETE", SNAPSHOTS_FILE, "PACKAGE", f"DAY_START на {sorted(day)}, ожидались начала кварталов охвата {expected_days}")
     # The ContractState=UNKNOWN row of an unread contract is not a required key: it exists only where it happened.
     def required_keys(keys: dict) -> set[tuple]:
@@ -271,11 +280,6 @@ def check_snapshots(rows: list[dict], ledger: list[dict], documents: list[dict],
     pairs = {(k[1], k[3]) for k in reference if k[0] == "CUSTOMER_CONTRACT" and k[2] in {"VALUE", "EMPTY"}}
     for customer in sorted({c for c, _ in pairs} - customers)[:EXAMPLES]:
         findings.error("COVERAGE_INCOMPLETE", SNAPSHOTS_FILE, customer, "договорные строки DAY_START без строки CUSTOMER")
-    required: dict[tuple[str, str], str] = {}
-    for name, source in ((LEDGER_FILE, ledger), (DOCUMENTS_FILE, documents)):
-        for row in source:
-            if row["КонтрагентID"]:
-                required.setdefault((row["КонтрагентID"], row["ДоговорID"]), name)
     missing = sorted(set(required) - pairs)
     for customer, contract in missing[:EXAMPLES]:
         findings.error("COVERAGE_INCOMPLETE", SNAPSHOTS_FILE, record_key("DAY_START", HISTORY_START, "", "CUSTOMER_CONTRACT", customer, "VALUE" if contract else "EMPTY", contract),
@@ -500,8 +504,14 @@ def check_quarters(rows: list[dict], ledger: list[dict], day: dict, horizon: str
         # General opening = sum of all customers at the quarter start; movements of a full quarter close it.
         opening_s = int(opening[0]) - int(opening[1])
         customers = [r for k, r in day.get(start, {}).items() if k[0] == "CUSTOMER"]
+        total = None
         if customers and all(signed(r) is not None for r in customers):
             total = sum(signed(r) for r in customers)
+        elif not day:
+            # No DAY_START at any boundary (the empty area of check_snapshots): no customer holds a balance, so the
+            # general opening is zero; a nonzero one means snapshots were lost, not an empty area.
+            total = 0
+        if total is not None:
             reconciled.append(("opening=customers", start, opening_s == total))
             if opening_s != total:
                 findings.error("SNAPSHOT_MISMATCH", QUARTERS_FILE, start, f"общий остаток на начало {opening_s} коп не равен сумме покупателей DAY_START {total} коп")

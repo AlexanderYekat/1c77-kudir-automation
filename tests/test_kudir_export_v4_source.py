@@ -64,10 +64,23 @@ class ExportV4SourceTests(unittest.TestCase):
         self.assertEqual([key for key, _ in pairs], chk.MANIFEST_KEYS)
         values = dict(pairs)
         for key, value in chk.MANIFEST_FIXED.items():
-            if key != "coverage_status":
+            if key not in {"coverage_status", "source_read_mode"}:
                 self.assertEqual(values[key], f'"{value}"')
         # coverage_status - параметр: INCOMPLETE при записи и после сбоя, COMPLETE только перед публикацией (Э0.6).
         self.assertEqual(values["coverage_status"], "Охват")
+        # source_read_mode - по признаку kudir_read_mode.txt базы, прочитанному до создания каталога.
+        self.assertEqual(values["source_read_mode"], "гл4РежимЧтения")
+
+    def test_read_mode_marker(self) -> None:
+        # Без файла - рабочая база QUIET_WINDOW; иное содержимое, кроме двух значений №1 §23.2, останавливает запуск.
+        reader = active(body(self.src, "КУДиР4_ПрочитатьРежимЧтения"))
+        self.assertIn('Путь = Кат + "kudir_read_mode.txt";', reader)
+        self.assertRegex(reader, r'Если Есть = 0 Тогда\s+Возврат "QUIET_WINDOW";')
+        self.assertIn('Если (Значение <> "CONSISTENT_COPY") И (Значение <> "QUIET_WINDOW") Тогда', reader)
+        start = active(body(self.src, "КУДиР4_НачатьЗапуск"))
+        read = start.index("гл4РежимЧтения = КУДиР4_ПрочитатьРежимЧтения();")
+        self.assertLess(read, start.index("КУДиР4_СоздатьКаталогЗапуска()"))
+        self.assertRegex(start[read:], r'^гл4РежимЧтения = КУДиР4_ПрочитатьРежимЧтения\(\);\s+Если СтрДлина\(гл4РежимЧтения\) = 0 Тогда\s+Возврат 0;')
 
     def test_status_writing_first_complete_last(self) -> None:
         start = active(body(self.src, "КУДиР4_НачатьЗапуск"))

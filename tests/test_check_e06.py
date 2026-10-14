@@ -30,11 +30,12 @@ MEMORY_LINE = "2026-10-13 10:00:{s:02d} | INFO | Э0.6 память [{point}]: p
               "peak_ws_kb=71000 peak_virtual_kb=301000 peak_private_kb={p}\r\n"
 
 
-def build(directory: Path, status: str = "COMPLETE", coverage: str | None = None) -> None:
+def build(directory: Path, status: str = "COMPLETE", coverage: str | None = None, read_mode: str = "QUIET_WINDOW") -> None:
     base5.build(directory)
     coverage = coverage or ("COMPLETE" if status == "COMPLETE" else "INCOMPLETE")
     manifest = directory / "manifest.csv"
-    manifest.write_bytes(manifest.read_bytes().replace(b"coverage_status;INCOMPLETE", f"coverage_status;{coverage}".encode()))
+    text = manifest.read_bytes().replace(b"coverage_status;INCOMPLETE", f"coverage_status;{coverage}".encode())
+    manifest.write_bytes(text.replace(b"source_read_mode;QUIET_WINDOW", f"source_read_mode;{read_mode}".encode()))
     base3.write_csv(directory / "export_status.csv", ["key", "value"], [["run_id", RUN_ID], ["schema_version", "4"], ["status", status]])
     # Выгрузка FULL не пишет ERROR диагностического набора Э0.2-Э0.5 (первая строка базового набора).
     diagnostics = e02.parse_csv((directory / "diagnostics.csv").read_bytes(), "diagnostics.csv", e02.Findings())
@@ -42,7 +43,8 @@ def build(directory: Path, status: str = "COMPLETE", coverage: str | None = None
     if status == "FAILED":
         rows.append(["ERROR", "ledger62.csv", "PACKAGE", "", "READ_ERROR", "исключение на этапе [ledger62, первое чтение]: Деление на 0"])
     base3.write_csv(directory / "diagnostics.csv", e02.DIAG_HEADER, rows)
-    log = f"2026-10-13 10:00:00 | INFO | START Э0.6 version=2026.10.13-01 run_id={RUN_ID} source_id=ctoksm-buh окно=2026-01-01..{base5.HORIZON}\r\n"
+    log = f"2026-10-13 10:00:00 | INFO | START Э0.6 version=2026.10.15-01 run_id={RUN_ID} source_id=ctoksm-buh " \
+          f"source_read_mode={read_mode} окно=2026-01-01..{base5.HORIZON}\r\n"
     log += MEMORY_LINE.format(s=1, point="старт", p=40000) + MEMORY_LINE.format(s=2, point="ledger62, первое чтение", p=41000)
     log += f"2026-10-13 10:00:30 | INFO | END Э0.6 итог={status} run_id={RUN_ID} export_status={status} ошибок=0\r\n"
     log += MEMORY_LINE.format(s=31, point="после освобождения", p=40500)
@@ -70,6 +72,16 @@ class CheckE06PackageTests(unittest.TestCase):
         self.assertEqual(summary["verdict"], "PASS")
         self.assertEqual([p["point"] for p in summary["memory"]], ["старт", "ledger62, первое чтение", "после освобождения"])
         self.assertEqual(summary["memory"][0]["private_kb"], 40000)
+
+    def test_read_mode_of_a_marked_copy_passes(self) -> None:
+        build(self.run, read_mode="CONSISTENT_COPY")
+        findings, summary = self.check()
+        self.assertEqual(self.codes(findings), [])
+        self.assertEqual(summary["source_read_mode"], "CONSISTENT_COPY")
+
+    def test_unknown_read_mode_fails(self) -> None:
+        build(self.run, read_mode="COPY")
+        self.assertTrue(any("'COPY', ожидалось одно из" in m for m in self.codes(self.check()[0])))
 
     def test_complete_status_needs_complete_coverage(self) -> None:
         build(self.run, coverage="INCOMPLETE")
@@ -149,6 +161,12 @@ class CheckE06PackageTests(unittest.TestCase):
         build(other)
         findings, _ = chk.compare_packages(self.run, other)
         self.assertEqual(findings.errors, 0)
+        # Копия и её рабочая база сравниваются: режим чтения - не содержимое.
+        copy = self.tmp / "copy" / RUN_ID
+        build(copy, read_mode="CONSISTENT_COPY")
+        findings, summary = chk.compare_packages(self.run, copy)
+        self.assertEqual(findings.errors, 0)
+        self.assertEqual(summary["manifest"]["source_read_mode"], ("QUIET_WINDOW", "CONSISTENT_COPY"))
         path = other / chk.LEDGER_FILE
         rows = e02.parse_csv(path.read_bytes(), path.name, e02.Findings())
         amount = rows[0].index("СуммаКоп")
@@ -156,6 +174,40 @@ class CheckE06PackageTests(unittest.TestCase):
         base3.write_csv(path, rows[0], rows[1:])
         findings, _ = chk.compare_packages(self.run, other)
         self.assertGreater(findings.errors, 0)
+
+    def build_empty(self, opening: str = "0") -> None:
+        # Область без покупателей (№1 §4): ни движений, ни документов, ни входящих остатков - DAY_START писать не для кого.
+        build(self.run)
+        for name, header in ((chk.LEDGER_FILE, chk.LEDGER_HEADER), (chk.DOCUMENTS_FILE, chk.DOCUMENTS_HEADER),
+                             (chk.SNAPSHOTS_FILE, chk.SNAPSHOTS_HEADER), ("id_map.csv", e02.ID_MAP_HEADER)):
+            base3.write_csv(self.run / name, header, [])
+        # Предупреждения, которые модуль пишет при любом содержимом: Содержание documents.csv и неполный текущий квартал.
+        base3.write_csv(self.run / "diagnostics.csv", e02.DIAG_HEADER, [
+            ["WARNING", chk.DOCUMENTS_FILE, "PACKAGE", "Содержание", "SOURCE_FIELD_UNAVAILABLE", "источник Содержание документа не подтверждён"],
+            ["WARNING", chk.QUARTERS_FILE, "2026-04-01", "closing_debit_kopecks", "COVERAGE_INCOMPLETE", "текущий неполный квартал"],
+        ])
+        base3.write_csv(self.run / chk.QUARTERS_FILE, chk.QUARTERS_HEADER, [
+            ["2026-01-01", "2026-03-31", "2026-03-31", "1", opening, "0", opening, "0", "KNOWN", "REFRESHED", RUN_ID, "0"],
+            ["2026-04-01", "2026-06-30", base5.HORIZON, "0", opening, "0", "", "", "UNKNOWN", "REFRESHED", RUN_ID, "0"],
+        ])
+
+    def test_empty_area_passes(self) -> None:
+        self.build_empty()
+        findings, summary = self.check()
+        self.assertEqual(self.codes(findings), [])
+        self.assertEqual(summary["verdict"], "PASS")
+        self.assertTrue(any(item["code"] == "EMPTY_AREA" for item in findings.items))
+
+    def test_empty_snapshots_with_nonzero_opening_fail(self) -> None:
+        # Без DAY_START общий остаток на начало обязан быть нулевым: ненулевой - потерянные снимки, а не пустая область.
+        self.build_empty(opening="70000")
+        self.assertTrue(any("не равен сумме покупателей DAY_START 0 коп" in m for m in self.codes(self.check()[0])))
+
+    def test_empty_snapshots_with_customers_fail(self) -> None:
+        build(self.run)
+        base3.write_csv(self.run / chk.SNAPSHOTS_FILE, chk.SNAPSHOTS_HEADER, [])
+        messages = self.codes(self.check()[0])
+        self.assertTrue(any("DAY_START на [], ожидались" in m for m in messages))
 
     def test_memory_table(self) -> None:
         build(self.run)
@@ -172,7 +224,7 @@ class SeriesJudgeTests(unittest.TestCase):
         shutil.rmtree(self.tmp)
 
     def operation(self, name: str, directories: list[Path], statuses: list[str]) -> dict:
-        actual = ["selected:x", "open-return:0", "loaded:2026.10.13-01"]
+        actual = ["selected:x", "open-return:0", "loaded:2026.10.15-01"]
         for directory, status in zip(directories, statuses):
             actual += [f"catalog:{directory}", f"status:{status}"]
         return {"name": name, "actual": actual, "diagnostics": [], "loaded": True}
@@ -212,6 +264,27 @@ class SeriesJudgeTests(unittest.TestCase):
         self.assertIn("шагов 2, каталогов 1", problems)
         self.assertIn("изменены прежние каталоги: ['KUDIR4_20261012_004']", problems)
         self.assertEqual(report["previous_directories_unchanged"], 1)
+
+    def test_missing_diagnostics_or_run_id_is_a_problem(self) -> None:
+        # Замечание ревью Э0.6: без diagnostics.csv судья видел «0 ERROR», без run_id - допустимое None.
+        for broken in ("diagnostics", "run_id"):
+            good = self.tmp / broken / RUN_ID
+            build(good)
+            if broken == "diagnostics":
+                (good / "diagnostics.csv").unlink()
+            else:
+                base3.write_csv(good / "export_status.csv", ["key", "value"], [["schema_version", "4"], ["status", "COMPLETE"]])
+            report = series.judge_series([self.operation("full", [good], ["COMPLETE"])], ["full"], {}, {}, self.tmp)
+            problems = " | ".join(report["problems"])
+            self.assertIn("нет diagnostics.csv" if broken == "diagnostics" else "run_id export_status None", problems)
+            self.assertIn("check_e06 package FAIL", problems)
+
+    def test_ok_step_with_bad_content_is_a_problem(self) -> None:
+        good = self.tmp / "A" / RUN_ID
+        build(good)
+        (good / chk.QUARTERS_FILE).unlink()
+        report = series.judge_series([self.operation("full", [good], ["COMPLETE"])], ["full"], {}, {}, self.tmp)
+        self.assertTrue(any("check_e06 package FAIL" in p and chk.QUARTERS_FILE in p for p in report["problems"]))
 
     def test_run_names(self) -> None:
         self.assertTrue(series.RUN_NAME.fullmatch("full"))

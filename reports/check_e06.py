@@ -8,7 +8,8 @@
 static  - the narrow text checks of check_e02 with the form button ВыгрузкаПолная(). It is not a 1C compiler.
 package - one directory written by the «Выгрузка» button (КУДиР4_ПолнаяВыгрузка). A published package (export_status
           COMPLETE) must have the eight files of №1 §5 and nothing else but the technical 1c_export.log and csv_selftest.csv,
-          no *.tmp left by the publication, manifest coverage_status=COMPLETE, no ERROR in diagnostics.csv and the log END
+          no *.tmp left by the publication, manifest coverage_status=COMPLETE and source_read_mode QUIET_WINDOW (live base)
+          or CONSISTENT_COPY (a copy marked by kudir_read_mode.txt), no ERROR in diagnostics.csv and the log END
           итог=COMPLETE; then every check of the content made by check_e05 (ledger62, documents, snapshots and their
           reconciliations with zero tolerance, quarters REFRESHED by this run, id_map references and orphans, CSV
           self-test). A FAILED or WRITING directory is never accepted (verdict FAIL): its manifest must keep
@@ -16,7 +17,7 @@ package - one directory written by the «Выгрузка» button (КУДиР4_
           closed, of the log. The files it did write are still checked, but their content findings (a stopped run leaves
           partial files) are reported as UNPUBLISHED, not ERROR: only the form of the failed directory is judged.
 compare - two runs over the same area: ledger62, documents, id_map, snapshots and controls equal (check_e05 compare),
-          manifests equal except run_id. An E0.5 set may be the first one: its manifest is not compared.
+          manifests equal except run_id and source_read_mode. An E0.5 set may be the first one: its manifest is not compared.
 memory  - the memory points of the logs (КУДиР4_Память, №4 §15) as a table per run, in MB.
 
 Exit codes: 0 - PASS; 1 - ERROR findings or not a published package (FAIL).
@@ -53,6 +54,8 @@ PACKAGE_FILES = ["manifest.csv", LEDGER_FILE, DOCUMENTS_FILE, SNAPSHOTS_FILE, QU
 # The technical log and the CSV self-test of the exporter are not input tables (№1 §5), but they are its own files.
 TECHNICAL_FILES = {LOG_FILE, SELFTEST_FILE}
 STATES = {"WRITING", "FAILED", "COMPLETE"}
+# №1 §§20, 23.2: the live base is read as QUIET_WINDOW; a manual copy marked by kudir_read_mode.txt - CONSISTENT_COPY.
+READ_MODES = {"QUIET_WINDOW", "CONSISTENT_COPY"}
 # Log line of a VAT-on-top document (КУДиР4_ДокументКандидат), the source for the owner's check of such documents.
 VAT_ON_TOP_LOG = "Э0.6 НДС сверху: "
 MEMORY = re.compile(r"^(\d{4}-\d{2}-\d{2} +\d{1,2}:\d{2}:\d{2}) \| \w+ \| Э0\.6 память \[(.+?)\]: pid=(\d+) private_kb=(\d+) ws_kb=(\d+) "
@@ -83,9 +86,12 @@ def check_meta(directory: Path, findings: Findings, summary: dict) -> tuple[str 
         summary["match_horizon_end"] = manifest.get("match_horizon_end")
         if manifest.get("run_id") != run_id:
             findings.error("CSV_INVALID", "manifest.csv", "run_id", f"run_id {manifest.get('run_id')!r} не равен имени каталога {run_id!r}")
+        summary["source_read_mode"] = manifest.get("source_read_mode")
         for key, expected in e02.MANIFEST_FIXED.items():
-            if key != "coverage_status" and manifest.get(key) != expected:
+            if key not in {"coverage_status", "source_read_mode"} and manifest.get(key) != expected:
                 findings.error("CSV_INVALID", "manifest.csv", key, f"{manifest.get(key)!r}, ожидалось {expected!r}")
+        if manifest.get("source_read_mode") not in READ_MODES:
+            findings.error("CSV_INVALID", "manifest.csv", "source_read_mode", f"{manifest.get('source_read_mode')!r}, ожидалось одно из {sorted(READ_MODES)}")
         if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", manifest.get("source_id", "")):
             findings.error("CSV_INVALID", "manifest.csv", "source_id", f"недопустимый source_id {manifest.get('source_id')!r}")
         if not DATE.fullmatch(manifest.get("match_horizon_end", "")):
@@ -216,11 +222,13 @@ def compare_packages(first: Path, second: Path) -> tuple[Findings, dict]:
     local = Findings()
     manifests = [read_key_value(d, "manifest.csv", e02.MANIFEST_KEYS, local) or {} for d in (first, second)]
     for key in e02.MANIFEST_KEYS:
-        if key in {"run_id", "coverage_status"}:
+        # The read mode says how the source was read, not what it holds: a copy and its live base may be compared.
+        if key in {"run_id", "coverage_status", "source_read_mode"}:
             continue
         if manifests[0].get(key) != manifests[1].get(key):
             findings.error("COMPARE", "manifest.csv", key, f"{manifests[0].get(key)!r} и {manifests[1].get(key)!r}")
-    summary["manifest"] = {key: (manifests[0].get(key), manifests[1].get(key)) for key in ("source_id", "match_horizon_end", "coverage_status")}
+    summary["manifest"] = {key: (manifests[0].get(key), manifests[1].get(key))
+                           for key in ("source_id", "match_horizon_end", "coverage_status", "source_read_mode")}
     return findings, summary
 
 

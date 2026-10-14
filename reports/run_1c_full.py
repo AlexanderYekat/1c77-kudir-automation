@@ -12,9 +12,11 @@ export_status. The steps of one --run share the form and its module variables: t
 after a failure.
 
 Judged (exit 1 when anything fails):
-- an ok step publishes export_status=COMPLETE with manifest coverage_status=COMPLETE and no ERROR in diagnostics.csv;
-- a fault step leaves FAILED (never COMPLETE), coverage_status=INCOMPLETE, an ERROR in diagnostics.csv and no
-  export_status.csv.tmp/manifest.csv.tmp left that a reader could take for a result;
+- every step: export_status.csv and manifest.csv carry the run_id of the directory, diagnostics.csv exists;
+- an ok step publishes export_status=COMPLETE with manifest coverage_status=COMPLETE and no ERROR in diagnostics.csv,
+  and check_e06 package passes (all files and their content);
+- a fault step leaves FAILED (never COMPLETE), coverage_status=INCOMPLETE, an ERROR in diagnostics.csv, no
+  export_status.csv.tmp/manifest.csv.tmp left that a reader could take for a result, and no form error of check_e06;
 - every run directory is new, and every KUDIR4_* directory that existed before the session is byte-identical after it:
   previous packages, successful or not, are never touched.
 The memory lines of the logs (КУДиР4_Память) and the result per step go to series.json in the output directory.
@@ -34,6 +36,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
+import check_e06  # noqa: E402
 import run_1c_e05 as runner  # noqa: E402
 from check_e02 import Findings, parse_csv  # noqa: E402
 
@@ -84,25 +87,37 @@ def outcome(catalog: Path) -> dict:
     log = catalog / "1c_export.log"
     text = log.read_bytes().decode("cp1251", "replace") if log.is_file() else ""
     end = END.findall(text)
+    # The whole package check: files, metadata and content of a published directory, the form of a failed one.
+    findings, summary = check_e06.check_package(catalog)
     return {
         "catalog": catalog.name, "status": status.get("status"), "status_run_id": status.get("run_id"),
         "coverage_status": manifest.get("coverage_status"), "manifest_run_id": manifest.get("run_id"),
+        "diagnostics": rows is not None,
         "errors": len(errors), "first_errors": [r[4] + " " + r[1] + ": " + r[5][:160] for r in errors[:3] if len(r) >= 6],
         "leftovers": sorted(p.name for p in catalog.glob("*.tmp")), "end": end[-1] if end else None,
+        "package_verdict": summary["verdict"],
+        "package_errors": [f"{i['file']}: {i['message'][:160]}" for i in findings.items if i["severity"] == "ERROR"],
         "memory": memory_points(text),
     }
 
 
 def judge_step(step: str, result: dict) -> list[str]:
     problems = []
-    if result["status_run_id"] not in (None, result["catalog"]) or result["manifest_run_id"] not in (None, result["catalog"]):
-        problems.append("run_id файлов не равен каталогу")
+    # WRITING, manifest and diagnostics.csv are written before any step can fail: a missing file or run_id is a defect.
+    if result["status_run_id"] != result["catalog"] or result["manifest_run_id"] != result["catalog"]:
+        problems.append(f"run_id export_status {result['status_run_id']!r}, manifest {result['manifest_run_id']!r}, каталог {result['catalog']}")
+    if not result["diagnostics"]:
+        problems.append("нет diagnostics.csv")
     if step == "ok":
         if result["status"] != "COMPLETE" or result["coverage_status"] != "COMPLETE":
             problems.append(f"ожидался COMPLETE/COMPLETE, получено {result['status']}/{result['coverage_status']}")
         if result["errors"]:
             problems.append(f"ERROR в diagnostics.csv: {result['errors']}")
+        if result["package_verdict"] != "PASS":
+            problems.append(f"check_e06 package {result['package_verdict']}, ошибок {len(result['package_errors'])}: {result['package_errors'][:3]}")
     else:
+        if result["package_errors"]:
+            problems.append(f"сбой {step}: ошибки формы каталога {result['package_errors'][:3]}")
         if result["status"] != "FAILED":
             problems.append(f"сбой {step}: ожидался FAILED, получено {result['status']}")
         if result["coverage_status"] != "INCOMPLETE":
@@ -185,7 +200,8 @@ def main(argv: list[str] | None = None) -> int:
         (args.output / "before.json").write_text(json.dumps(before, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
         (args.output / "series.json").write_text(json.dumps(series, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     brief = {"problems": series.get("problems"), "previous_directories_unchanged": series.get("previous_directories_unchanged"),
-             "runs": [{k: r[k] for k in ("step", "catalog", "status", "coverage_status", "errors", "first_errors")} for r in series.get("runs", [])]}
+             "runs": [{k: r[k] for k in ("step", "catalog", "status", "coverage_status", "errors", "first_errors", "package_verdict")}
+                      for r in series.get("runs", [])]}
     print(json.dumps(brief, ensure_ascii=False, indent=2))
     return code
 
