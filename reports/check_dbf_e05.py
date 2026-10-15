@@ -36,6 +36,7 @@ sys.path.insert(0, str(HERE))
 
 import check_e05 as e05  # noqa: E402
 from check_dbf_e04 import account_code, b36, kopecks, read_dbf  # noqa: E402
+import check_e02 as e02  # noqa: E402  run_start: the window of a run of any stage
 from check_e02 import Findings, read_table  # noqa: E402
 from check_e03 import rub  # noqa: E402
 
@@ -288,8 +289,8 @@ def main(argv: list[str] | None = None) -> int:
     local = Findings()
     snapshots = read_table(args.run, e05.SNAPSHOTS_FILE, e05.SNAPSHOTS_HEADER, local)
     quarters = read_table(args.run, e05.QUARTERS_FILE, e05.QUARTERS_HEADER, local)
-    log = args.run / "1c_export.log"
-    window = e05.window_of(log.read_bytes().decode("cp1251", "replace") if log.is_file() else None)
+    start = e02.run_start(e02.log_of(args.run))
+    window = start[1] if start else None
     if snapshots is None or quarters is None or window is None:
         print(f"набор не прочитан: окно {window}, {local.items}")
         return 2

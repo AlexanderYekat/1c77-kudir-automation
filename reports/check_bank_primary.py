@@ -379,8 +379,8 @@ def sheet(bankdiag: Path, run: Path) -> str:
          [i for i in missing if i["row"]["НазначениеПлатежа"].strip().lower().startswith("экв")][:1]
          + [i for i in missing if i["row"]["НазначениеПлатежа"].startswith("Оплата по документу")][:1])
 
-    version = next((re.search(r"version=(\S+)", line)[1] for line in
-                    io.open(run / "1c_export.log", encoding="cp1251").read().splitlines() if " START Э0.3 version=" in line), "?")
+    start = e02.run_start(e02.log_of(run))
+    version = start[0] if start else "?"
     total = Counter(codes.get(led["payment_id"], "FOUND") for led in payments.values())
     lines = [
         "# Сверка первички банковских оплат с 1С", "",

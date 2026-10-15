@@ -74,8 +74,9 @@ def window_of(log_text: str | None) -> tuple[str, str] | None:
 
 
 def vat_on_top(log_text: str | None) -> list[tuple[str, str, str]]:
-    """(kind, number, date) of documents the export logged as having VAT on top of Сумма, in log order."""
-    return re.findall(rf"{re.escape(VAT_ON_TOP_LOG)}(\S+) (.*?) от (\d{{4}}-\d{{2}}-\d{{2}});", log_text or "")
+    """(kind, number, date) of documents the export logged as having VAT on top of Сумма, in log order. Every module since
+    E0.4 writes the line under its own stage label (VAT_ON_TOP_LOG here, Э0.5/Э0.6 later)."""
+    return re.findall(r"Э0\.\d+ НДС сверху: (\S+) (.*?) от (\d{4}-\d{2}-\d{2});", log_text or "")
 
 
 def vat_aggregates(row: dict) -> tuple[int, int, int] | None:
@@ -482,9 +483,9 @@ def sheet(directory: Path) -> str:
     ledger = read_table(directory, LEDGER_FILE, LEDGER_HEADER, local) or []
     diag = read_table(directory, "diagnostics.csv", e02.DIAG_HEADER, local) or []
     manifest = read_key_value(directory, "manifest.csv", e02.MANIFEST_KEYS, local) or {}
-    log = directory / "1c_export.log"
-    log_text = log.read_bytes().decode("cp1251", "replace") if log.is_file() else ""
-    window = window_of(log_text)
+    log_text = e02.log_of(directory)
+    start = e02.run_start(log_text)
+    window = start[1] if start else None
     vat_reason = {d["record_key"]: d["message"] for d in diag if d["code"] == "VAT_COMPOSITION_UNKNOWN"}
     invoices = [d for d in documents if d["DocumentRole"] == "INVOICE"]
 

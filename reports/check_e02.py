@@ -219,6 +219,22 @@ def read_key_value(directory: Path, name: str, keys: list[str], findings: Findin
     return {row["key"]: row["value"] for row in rows}
 
 
+# START line of the run log of every stage module (Э0.2 ... Э0.6) - the same form under its own label. The package checks
+# keep their own label; the sheets and the DBF checks read the package of any stage through this one.
+RUN_START = re.compile(r"START Э0\.\d+ version=(\S+) .*?окно=(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})")
+
+
+def run_start(log_text: str | None) -> tuple[str, tuple[str, str]] | None:
+    """(module version, read window) of the first START line of a run log, whatever its stage."""
+    found = RUN_START.search(log_text or "")
+    return (found[1], (found[2], found[3])) if found else None
+
+
+def log_of(directory: Path) -> str:
+    log = directory / "1c_export.log"
+    return log.read_bytes().decode("cp1251", "replace") if log.is_file() else ""
+
+
 # --- IDs ---------------------------------------------------------------------------------------------
 
 def k_problem(k: str) -> str | None:

@@ -35,6 +35,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 import check_e04 as e04  # noqa: E402
+import check_e02 as e02  # noqa: E402  run_start: the window of a run of any stage
 from check_e02 import Findings, read_table  # noqa: E402
 from check_e03 import LEDGER_FILE, LEDGER_HEADER, rub  # noqa: E402
 
@@ -435,8 +436,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--json", type=Path)
     args = parser.parse_args(argv)
 
-    log = args.run / "1c_export.log"
-    window = tuple(args.window.split("..")) if args.window else e04.window_of(log.read_bytes().decode("cp1251", "replace") if log.is_file() else None)
+    start = e02.run_start(e02.log_of(args.run))
+    window = tuple(args.window.split("..")) if args.window else (start[1] if start else None)
     local = Findings()
     documents = read_table(args.run, e04.DOCUMENTS_FILE, e04.DOCUMENTS_HEADER, local)
     ledger = read_table(args.run, LEDGER_FILE, LEDGER_HEADER, local)

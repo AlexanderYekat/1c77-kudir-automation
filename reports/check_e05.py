@@ -67,8 +67,9 @@ QUARTERS_HEADER = [
     "ledger_row_count",
 ]
 VAT_ON_TOP_LOG = "Э0.5 НДС сверху: "
-# Per-account control lines of the run log, for the trial balance of 62 (КУДиР4_ОбщиеОстатки).
-CONTROL_LOG = re.compile(r"Э0\.5 контроль (\d{4}-\d{2}-\d{2}) счёт (\S+): СНД=(-?\d+) СНК=(-?\d+)(?: СКД=(-?\d+) СКК=(-?\d+) \(конец (\d{4}-\d{2}-\d{2})\))? коп")
+# Per-account control lines of the run log, for the trial balance of 62 (КУДиР4_ОбщиеОстатки); since E0.5 every module
+# writes them under its own stage label (Э0.5 контроль, Э0.6 контроль).
+CONTROL_LOG = re.compile(r"Э0\.\d+ контроль (\d{4}-\d{2}-\d{2}) счёт (\S+): СНД=(-?\d+) СНК=(-?\d+)(?: СКД=(-?\d+) СКК=(-?\d+) \(конец (\d{4}-\d{2}-\d{2})\))? коп")
 EXAMPLES = 5
 
 
@@ -712,7 +713,9 @@ def sample_documents(by_doc: dict[str, list[dict]], before: dict[str, dict]) -> 
     return chosen
 
 
-def sheet(directory: Path) -> str:
+def sheet(directory: Path, check=check_package, check_name: str = "check_e05 package") -> str:
+    """The KP0.5 sheet. Its section 4 reports the package check: by default that of a diagnostic E0.5 set, which refuses
+    COMPLETE; a published FULL package is given its own check (check_e06.check_package) by the caller."""
     local = Findings()
     ledger = read_table(directory, LEDGER_FILE, LEDGER_HEADER, local) or []
     documents = read_table(directory, DOCUMENTS_FILE, DOCUMENTS_HEADER, local) or []
@@ -839,10 +842,10 @@ def sheet(directory: Path) -> str:
     if not chosen:
         lines += ["Снимков перед документами нет.", ""]
 
-    findings, summary = check_package(directory)
+    findings, summary = check(directory)
     rec = summary.get("reconciliation", {})
     quarters_rec = summary.get("ledger_quarters", {}).get("reconciled", {})
-    lines += ["## 4. Автоматические сверки (check_e05 package)", "",
+    lines += [f"## 4. Автоматические сверки ({check_name})", "",
               f"Итог проверки: **{summary.get('verdict')}**, ошибок {findings.errors}.", "",
               f"- покупатель = сумма договоров: DAY_START проверено {rec.get('customer_vs_contracts_day', ['?'])[0]}, расхождений {rec.get('customer_vs_contracts_day', ['?', '?'])[1]}, "
               f"не подтверждено {rec.get('customer_vs_contracts_day', ['?'] * 3)[2]}; "

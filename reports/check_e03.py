@@ -500,8 +500,8 @@ def sheet(directory: Path) -> str:
     local = Findings()
     rows = read_table(directory, LEDGER_FILE, LEDGER_HEADER, local) or []
     manifest = read_key_value(directory, "manifest.csv", e02.MANIFEST_KEYS, local) or {}
-    log = directory / "1c_export.log"
-    window = re.findall(rf"START {LABEL} .*?окно=(\S+)", log.read_bytes().decode("cp1251", "replace")) if log.is_file() else []
+    start = e02.run_start(e02.log_of(directory))
+    window = ["..".join(start[1])] if start else []
     docs: dict[str, list[dict]] = defaultdict(list)
     for row in rows:
         docs[row["source_document_id"]].append(row)
