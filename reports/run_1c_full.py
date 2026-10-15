@@ -17,7 +17,7 @@ Judged (exit 1 when anything fails):
   and check_e06 package passes (all files and their content);
 - a fault step leaves FAILED (never COMPLETE), coverage_status=INCOMPLETE, an ERROR in diagnostics.csv, no
   export_status.csv.tmp/manifest.csv.tmp left that a reader could take for a result, and no form error of check_e06;
-- every run directory is new, and every KUDIR4_* directory that existed before the session is byte-identical after it:
+- every run directory is new and belongs to one step only, and every KUDIR4_* directory that existed before the session is byte-identical after it:
   previous packages, successful or not, are never touched.
 The memory lines of the logs (КУДиР4_Память) and the result per step go to series.json in the output directory.
 Exit codes as run_1c_e05: 0 - passed, 1 - failed, 2 - the session itself was blocked.
@@ -133,6 +133,7 @@ def judge_step(step: str, result: dict) -> list[str]:
 
 def judge_series(operations: list[dict], runs: list[str], before: dict, after: dict, exchange: Path) -> dict:
     report = {"runs": [], "problems": []}
+    counted: dict[Path, str] = {}
     for operation in operations:
         if operation["name"] == "check":
             if operation["diagnostics"] or not operation["loaded"]:
@@ -144,7 +145,7 @@ def judge_series(operations: list[dict], runs: list[str], before: dict, after: d
         steps = steps_of(operation["name"])
         if any(line.startswith("error:") for line in lines) or len(catalogs) != len(steps) or len(statuses) != len(steps):
             report["problems"].append(f"{operation['name']}: шагов {len(steps)}, каталогов {len(catalogs)}, ответ {lines[-3:]}")
-        for step, catalog, said in zip(steps, catalogs, statuses):
+        for number, (step, catalog, said) in enumerate(zip(steps, catalogs, statuses), 1):
             path = Path(catalog)
             if not catalog or not path.is_dir():
                 report["problems"].append(f"{operation['name']} {step}: каталог не создан ({said})")
@@ -155,6 +156,11 @@ def judge_series(operations: list[dict], runs: list[str], before: dict, after: d
                 result["problems"].append(f"модуль сообщил {said}, в export_status {result['status']}")
             if path.name in before:
                 result["problems"].append("каталог существовал до сеанса")
+            # Two steps reporting one directory are one export, not two: the second would judge the first one's files.
+            label = f"{operation['name']} шаг {number} ({step})"
+            first = counted.setdefault(path.resolve(), label)
+            if first != label:
+                result["problems"].append(f"каталог уже засчитан шагу {first}")
             report["runs"].append(result)
             report["problems"] += [f"{path.name} ({step}): {p}" for p in result["problems"]]
     changed = sorted(name for name, files in before.items() if after.get(name) != files)

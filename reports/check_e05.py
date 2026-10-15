@@ -508,13 +508,18 @@ def check_quarters(rows: list[dict], ledger: list[dict], day: dict, horizon: str
         if customers and all(signed(r) is not None for r in customers):
             total = sum(signed(r) for r in customers)
         elif not day:
-            # No DAY_START at any boundary (the empty area of check_snapshots): no customer holds a balance, so the
-            # general opening is zero; a nonzero one means snapshots were lost, not an empty area.
+            # No DAY_START at any boundary (the empty area of check_snapshots): no customer holds a balance, so both
+            # general opening sides are zero; a nonzero one means snapshots were lost, not an empty area.
             total = 0
         if total is not None:
-            reconciled.append(("opening=customers", start, opening_s == total))
+            # Дт and Кт that cancel in the net are still balances of customers, and those need snapshots.
+            lost = not day and any(int(v) for v in opening)
+            reconciled.append(("opening=customers", start, opening_s == total and not lost))
             if opening_s != total:
                 findings.error("SNAPSHOT_MISMATCH", QUARTERS_FILE, start, f"общий остаток на начало {opening_s} коп не равен сумме покупателей DAY_START {total} коп")
+            elif lost:
+                findings.error("SNAPSHOT_MISMATCH", QUARTERS_FILE, start, f"общие Дт {opening[0]} / Кт {opening[1]} коп на начало без снимков DAY_START: "
+                               "ненулевые остатки требуют снимков, даже если взаимно погашаются")
         if full:
             closing_s = int(closing[0]) - int(closing[1])
             reconciled.append(("closing-opening=movements", start, closing_s - opening_s == movements[start]))

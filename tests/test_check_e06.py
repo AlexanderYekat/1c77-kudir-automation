@@ -175,7 +175,7 @@ class CheckE06PackageTests(unittest.TestCase):
         findings, _ = chk.compare_packages(self.run, other)
         self.assertGreater(findings.errors, 0)
 
-    def build_empty(self, opening: str = "0") -> None:
+    def build_empty(self, opening: str = "0", credit: str = "0") -> None:
         # Область без покупателей (№1 §4): ни движений, ни документов, ни входящих остатков - DAY_START писать не для кого.
         build(self.run)
         for name, header in ((chk.LEDGER_FILE, chk.LEDGER_HEADER), (chk.DOCUMENTS_FILE, chk.DOCUMENTS_HEADER),
@@ -187,8 +187,8 @@ class CheckE06PackageTests(unittest.TestCase):
             ["WARNING", chk.QUARTERS_FILE, "2026-04-01", "closing_debit_kopecks", "COVERAGE_INCOMPLETE", "текущий неполный квартал"],
         ])
         base3.write_csv(self.run / chk.QUARTERS_FILE, chk.QUARTERS_HEADER, [
-            ["2026-01-01", "2026-03-31", "2026-03-31", "1", opening, "0", opening, "0", "KNOWN", "REFRESHED", RUN_ID, "0"],
-            ["2026-04-01", "2026-06-30", base5.HORIZON, "0", opening, "0", "", "", "UNKNOWN", "REFRESHED", RUN_ID, "0"],
+            ["2026-01-01", "2026-03-31", "2026-03-31", "1", opening, credit, opening, credit, "KNOWN", "REFRESHED", RUN_ID, "0"],
+            ["2026-04-01", "2026-06-30", base5.HORIZON, "0", opening, credit, "", "", "UNKNOWN", "REFRESHED", RUN_ID, "0"],
         ])
 
     def test_empty_area_passes(self) -> None:
@@ -202,6 +202,15 @@ class CheckE06PackageTests(unittest.TestCase):
         # Без DAY_START общий остаток на начало обязан быть нулевым: ненулевой - потерянные снимки, а не пустая область.
         self.build_empty(opening="70000")
         self.assertTrue(any("не равен сумме покупателей DAY_START 0 коп" in m for m in self.codes(self.check()[0])))
+
+    def test_empty_snapshots_with_cancelling_opening_fail(self) -> None:
+        # Замечание ревью Э0.6: Дт = Кт = 70 000 коп дают нулевое нетто, но это остатки покупателей без снимков.
+        self.build_empty(opening="70000", credit="70000")
+        findings, summary = self.check()
+        messages = [m for m in self.codes(findings) if "Дт 70000 / Кт 70000 коп на начало без снимков DAY_START" in m]
+        self.assertEqual(len(messages), 2)
+        self.assertEqual(summary["verdict"], "FAIL")
+        self.assertEqual(summary["ledger_quarters"]["reconciled"]["opening=customers: MISMATCH"], 2)
 
     def test_empty_snapshots_with_customers_fail(self) -> None:
         build(self.run)
@@ -264,6 +273,17 @@ class SeriesJudgeTests(unittest.TestCase):
         self.assertIn("шагов 2, каталогов 1", problems)
         self.assertIn("изменены прежние каталоги: ['KUDIR4_20261012_004']", problems)
         self.assertEqual(report["previous_directories_unchanged"], 1)
+
+    def test_one_directory_is_not_two_steps(self) -> None:
+        # Замечание ревью Э0.6: full_ok_ok с одним и тем же каталогом дважды - одна выгрузка, а не повторная.
+        good = self.tmp / "A" / RUN_ID
+        build(good)
+        report = series.judge_series([self.operation("full_ok_ok", [good, good], ["COMPLETE", "COMPLETE"])], ["full_ok_ok"], {}, {}, self.tmp)
+        self.assertEqual(report["problems"], [f"{RUN_ID} (ok): каталог уже засчитан шагу full_ok_ok шаг 1 (ok)"])
+        # Тот же каталог в другом --run - тоже не новый запуск.
+        report = series.judge_series([self.operation("full", [good], ["COMPLETE"]), self.operation("full_ok", [good], ["COMPLETE"])],
+                                     ["full", "full_ok"], {}, {}, self.tmp)
+        self.assertEqual(report["problems"], [f"{RUN_ID} (ok): каталог уже засчитан шагу full шаг 1 (ok)"])
 
     def test_missing_diagnostics_or_run_id_is_a_problem(self) -> None:
         # Замечание ревью Э0.6: без diagnostics.csv судья видел «0 ERROR», без run_id - допустимое None.
